@@ -80,7 +80,98 @@ export interface ProposalPDFInput {
   executiveSummary?: string;
 }
 
-/* ═══════════════════════════════════════════════════════════ */
+type PdfWorkerRequest = {
+  id: string;
+  input: ProposalPDFInput;
+};
+
+type PdfWorkerSuccessResponse = {
+  id: string;
+  success: true;
+  blob: Blob;
+};
+
+type PdfWorkerErrorResponse = {
+  id: string;
+  success: false;
+  error: string;
+  stack?: string;
+};
+
+type PdfWorkerResponse = PdfWorkerSuccessResponse | PdfWorkerErrorResponse;
+
+let pdfWorker: Worker | null = null;
+const pdfWorkerPromises = new Map<string, {
+  resolve: (blob: Blob) => void;
+  reject: (reason?: unknown) => void;
+}>();
+
+function createPdfWorker() {
+  if (typeof window === "undefined" || typeof Worker === "undefined") {
+    return null;
+  }
+
+  if (pdfWorker) return pdfWorker;
+
+  const worker = new Worker(new URL("./pdfGenerator.worker.ts", import.meta.url), { type: "module" });
+
+  worker.addEventListener("message", (event: MessageEvent<PdfWorkerResponse>) => {
+    const response = event.data;
+    const handlers = pdfWorkerPromises.get(response.id);
+    if (!handlers) return;
+    pdfWorkerPromises.delete(response.id);
+
+    if (response.success) {
+      handlers.resolve(response.blob);
+    } else {
+      handlers.reject(new Error(response.error || "PDF worker failed"));
+    }
+  });
+
+  worker.addEventListener("error", (event) => {
+    const message = event.message || "Unknown worker error";
+    pdfWorkerPromises.forEach((handlers) => {
+      handlers.reject(new Error(message));
+    });
+    pdfWorkerPromises.clear();
+    pdfWorker = null;
+  });
+
+  pdfWorker = worker;
+  return worker;
+}
+
+function generateProposalPDFBlobInWorker(input: ProposalPDFInput): Promise<Blob> {
+  const worker = createPdfWorker();
+  if (!worker) {
+    return Promise.reject(new Error("Web Workers are not supported in this environment."));
+  }
+
+  return new Promise<Blob>((resolve, reject) => {
+    const id = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const timeout = window.setTimeout(() => {
+      if (pdfWorkerPromises.has(id)) {
+        pdfWorkerPromises.delete(id);
+        reject(new Error("PDF generation timed out."));
+      }
+    }, 120000);
+
+    const wrappedResolve = (blob: Blob) => {
+      window.clearTimeout(timeout);
+      resolve(blob);
+    };
+
+    const wrappedReject = (reason?: unknown) => {
+      window.clearTimeout(timeout);
+      reject(reason);
+    };
+
+    pdfWorkerPromises.set(id, { resolve: wrappedResolve, reject: wrappedReject });
+    worker.postMessage({ id, input });
+  });
+}
+
+/* ═══════════════════════════════════════════════════════════════════ */
 /*                CHART DRAWING HELPERS                        */
 /* ═══════════════════════════════════════════════════════════ */
 
@@ -506,7 +597,7 @@ export function generateProposalPDF(input: ProposalPDFInput): jsPDF {
     const cx = mg + colW * i + 6;
     doc.setFontSize(6.5); doc.setTextColor(...C.textMuted); doc.setFont("helvetica","normal"); doc.text(f.label, cx, y + 10);
     doc.setFontSize(9); doc.setTextColor(...C.text); doc.setFont("helvetica","bold");
-    doc.text((f.value || "N/A").slice(0, 18), cx, y + 17);
+    doc.text(String(f.value ?? "N/A").slice(0, 18), cx, y + 17);
   });
 
   // Confidentiality notice on cover
@@ -596,7 +687,7 @@ export function generateProposalPDF(input: ProposalPDFInput): jsPDF {
     ].forEach((m, mi) => {
       const mx = sx + mColW * mi + 6;
       doc.setFontSize(6); doc.setTextColor(...C.textMuted); doc.setFont("helvetica","normal"); doc.text(m.label, mx, y + 6);
-      doc.setFontSize(10); doc.setTextColor(...C.primaryDark); doc.setFont("helvetica","bold"); doc.text(m.value.slice(0, 22), mx, y + 13);
+      doc.setFontSize(10); doc.setTextColor(...C.primaryDark); doc.setFont("helvetica","bold"); doc.text(String(m.value ?? "").slice(0, 22), mx, y + 13);
     });
     y += 24;
 
@@ -753,7 +844,49 @@ export function generateProposalPDFBlob(input: ProposalPDFInput): Blob {
   return generateProposalPDF(input).output("blob");
 }
 
-export function downloadProposalPDF(input: ProposalPDFInput, fileName?: string): void {
-  const doc = generateProposalPDF(input);
-  doc.save(fileName || `${(input.title || "proposal").replace(/[^a-zA-Z0-9]/g, "_")}.pdf`);
+export async function generateProposalPDFBlobAsync(input: ProposalPDFInput): Promise<Blob> {
+  if (typeof window !== "undefined" && typeof Worker !== "undefined") {
+    try {
+      return await generateProposalPDFBlobInWorker(input);
+    } catch (error) {
+      console.warn("PDF worker failed, falling back to main thread:", error);
+    }
+  }
+
+  return await new Promise<Blob>((resolve, reject) => {
+    const run = () => {
+      try {
+        const blob = generateProposalPDF(input).output("blob");
+        resolve(blob);
+      } catch (err) {
+        reject(err);
+      }
+    };
+
+    if (typeof window !== "undefined") {
+      const rIC = (window as any).requestIdleCallback;
+      if (typeof rIC === "function") {
+        rIC(() => run());
+      } else {
+        setTimeout(run, 50);
+      }
+    } else {
+      setTimeout(run, 0);
+    }
+  });
+}
+
+export async function downloadProposalPDF(input: ProposalPDFInput, fileName?: string): Promise<void> {
+  const blob = await generateProposalPDFBlobAsync(input);
+  const url = URL.createObjectURL(blob);
+  try {
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = fileName || `${(input.title || "proposal").replace(/[^a-zA-Z0-9]/g, "_")}.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  } finally {
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  }
 }

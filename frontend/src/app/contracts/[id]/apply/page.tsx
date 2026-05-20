@@ -26,7 +26,7 @@ import {
   type ExpandProgress,
   type ParsedUploadedProposal,
 } from "@/services/aiService";
-import { downloadProposalPDF, generateProposalPDF, TEMPLATE_OPTIONS, type TemplateName } from "@/services/pdfGenerator";
+import { downloadProposalPDF, generateProposalPDFBlobAsync, TEMPLATE_OPTIONS, type TemplateName } from "@/services/pdfGenerator";
 
 /* ─── helpers ─────────────────────────────────────────────── */
 function normalizeDoc(data: Record<string, unknown>): Record<string, unknown> {
@@ -64,6 +64,25 @@ const SECTION_LABELS: Record<keyof ProposalSections, string> = {
   document_uploads: "Document Uploads",
   final_declaration: "Final Declaration",
 };
+
+const VISIBLE_SECTION_KEYS: (keyof ProposalSections)[] = [
+  "company_profile",
+  "project_understanding",
+  "proposed_solution",
+  "deliverables",
+  "project_timeline",
+  "cost_proposal",
+  "team_details",
+  "past_experience",
+  "risk_management",
+  "support_maintenance",
+  "graphs_visualizations",
+  "terms_conditions",
+  "document_uploads",
+  "final_declaration",
+];
+
+const VISIBLE_SECTION_COUNT = VISIBLE_SECTION_KEYS.length;
 
 const SECTION_ICONS: Record<keyof ProposalSections, string> = {
   vendor_information: "M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z",
@@ -237,7 +256,7 @@ export default function ApplyPage() {
   const [editingSection, setEditingSection] = useState<keyof ProposalSections | null>(null);
   const [editInstructions, setEditInstructions] = useState("");
   const [editLoading, setEditLoading] = useState(false);
-  const [activeEditorSection, setActiveEditorSection] = useState<keyof ProposalSections>("vendor_information");
+  const [activeEditorSection, setActiveEditorSection] = useState<keyof ProposalSections>("company_profile");
 
   /* ─── Upload state ─── */
   const [uploadFile, setUploadFile] = useState<File | null>(null);
@@ -264,6 +283,69 @@ export default function ApplyPage() {
 
   /* ─── PDF Preview ─── */
   const [pdfPreviewUrl, setPdfPreviewUrl] = useState<string | null>(null);
+
+  const STORAGE_KEY = `contract-apply-state-${contractId}`;
+
+  /* ─── Restore saved page state when returning to this contract apply page ─── */
+  useEffect(() => {
+    if (!contractId || typeof window === "undefined") return;
+    const saved = sessionStorage.getItem(STORAGE_KEY);
+    if (!saved) return;
+    try {
+      const parsed = JSON.parse(saved) as Partial<{
+        step: Step;
+        generatingProposal: boolean;
+        showPdfOptions: boolean;
+        proposalTitle: string;
+        totalPrice: string;
+        timelineSummary: string;
+        selectedTemplate: TemplateName;
+        chartData: ChartData | null;
+        executiveSummary: string;
+        sections: ProposalSections;
+        proposalReady: boolean;
+        sectionIndex: number;
+      }>;
+
+      if (parsed.step) setStep(parsed.step);
+      if (typeof parsed.generatingProposal === "boolean") setGeneratingProposal(parsed.generatingProposal);
+      if (typeof parsed.showPdfOptions === "boolean") setShowPdfOptions(parsed.showPdfOptions);
+      if (parsed.proposalTitle) setProposalTitle(parsed.proposalTitle);
+      if (parsed.totalPrice) setTotalPrice(parsed.totalPrice);
+      if (parsed.timelineSummary) setTimelineSummary(parsed.timelineSummary);
+      if (parsed.selectedTemplate) setSelectedTemplate(parsed.selectedTemplate);
+      if (parsed.chartData) setChartData(parsed.chartData);
+      if (parsed.executiveSummary) setExecutiveSummary(parsed.executiveSummary);
+      if (parsed.sections) setSections(parsed.sections);
+      if (typeof parsed.proposalReady === "boolean") setProposalReady(parsed.proposalReady);
+      if (typeof parsed.sectionIndex === "number") setSectionIndex(parsed.sectionIndex);
+    } catch (err) {
+      console.warn("Failed to restore contract apply state:", err);
+    }
+  }, [contractId, STORAGE_KEY]);
+
+  /* ─── Save page state so returning to this contract preserves progress ─── */
+  useEffect(() => {
+    if (!contractId || typeof window === "undefined") return;
+    try {
+      sessionStorage.setItem(STORAGE_KEY, JSON.stringify({
+        step,
+        generatingProposal,
+        showPdfOptions,
+        proposalTitle,
+        totalPrice,
+        timelineSummary,
+        selectedTemplate,
+        chartData,
+        executiveSummary,
+        sections,
+        proposalReady,
+        sectionIndex,
+      }));
+    } catch (err) {
+      console.warn("Failed to save contract apply state:", err);
+    }
+  }, [contractId, STORAGE_KEY, step, generatingProposal, showPdfOptions, proposalTitle, totalPrice, timelineSummary, selectedTemplate, chartData, executiveSummary, sections, proposalReady, sectionIndex]);
 
   /* ─── Fetch contract ─── */
   useEffect(() => {
@@ -433,7 +515,7 @@ export default function ApplyPage() {
   };
 
   /* ═══ STEP 3a: Chat ═══ */
-  const sectionKeys = Object.keys(SECTION_LABELS) as (keyof ProposalSections)[];
+  const sectionKeys = VISIBLE_SECTION_KEYS;
 
   const handleSendChat = async () => {
     if (!chatInput.trim() || chatLoading) return;
@@ -443,14 +525,12 @@ export default function ApplyPage() {
     setChatInput("");
     setChatLoading(true);
     try {
-      // Tell the API which section to ask about next
-      const nextIndex = Math.min(sectionIndex + 1, 15);
-      // Only send last 4 messages to avoid LLM context overflow; full history kept for final generation
+      // Keep the current section index until the AI confirms that section is complete.
       const recentMessages = updated.slice(-4);
-      const resp = await proposalChat(recentMessages, getRfpContext(), nextIndex);
+      const resp = await proposalChat(recentMessages, getRfpContext(), sectionIndex);
       setChatMessages([...updated, { role: "assistant", content: resp.reply }]);
       setSectionIndex(resp.section_index);
-      if (resp.proposal_ready || resp.section_index >= 15) {
+      if (resp.proposal_ready || resp.section_index >= VISIBLE_SECTION_COUNT) {
         setProposalReady(true);
       }
     } catch {
@@ -533,7 +613,8 @@ export default function ApplyPage() {
   }), [proposalTitle, profile?.company_name, contract?.title, totalPrice, timelineSummary, sections, selectedTemplate, chartData, executiveSummary]);
 
   const handleDownloadPDF = () => {
-    downloadProposalPDF(getPdfInput());
+    // Start download in background (non-blocking)
+    downloadProposalPDF(getPdfInput()).catch((err) => console.error("PDF download failed:", err));
   };
 
   /* Regenerate PDF preview when on preview step and inputs change */
@@ -541,14 +622,17 @@ export default function ApplyPage() {
     if (step !== "preview") return;
     // Revoke old URL to avoid memory leaks
     let url: string | null = null;
-    try {
-      const pdfDoc = generateProposalPDF(getPdfInput());
-      const blob = pdfDoc.output("blob");
-      url = URL.createObjectURL(blob);
-      setPdfPreviewUrl(url);
-    } catch (e) {
-      console.error("PDF preview generation failed:", e);
-    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const blob = await generateProposalPDFBlobAsync(getPdfInput());
+        if (cancelled) return;
+        url = URL.createObjectURL(blob);
+        setPdfPreviewUrl(url);
+      } catch (e) {
+        console.error("PDF preview generation failed:", e);
+      }
+    })();
     return () => { if (url) URL.revokeObjectURL(url); };
   }, [step, getPdfInput]);
 
@@ -943,7 +1027,7 @@ export default function ApplyPage() {
             <div className="flex items-center justify-between">
               <div>
                 <h2 className="text-lg font-bold text-[var(--foreground)]">AI Proposal Builder</h2>
-                <p className="text-xs text-[var(--muted)]">Answer all 15 sections. The AI will ask about each one in order.</p>
+                <p className="text-xs text-[var(--muted)]">Answer all 14 sections. The AI will ask about each one in order.</p>
               </div>
               <div className="flex gap-2">
                 {(proposalReady || chatMessages.length >= 6) && !showPdfOptions && (
@@ -968,10 +1052,10 @@ export default function ApplyPage() {
             <div className="card !p-4">
               <div className="flex items-center justify-between mb-2">
                 <p className="text-xs font-semibold text-[var(--foreground)]">Interview Progress</p>
-                <span className="text-xs font-bold text-[var(--primary)]">{Math.min(sectionIndex, 15)}/15 Sections</span>
+                <span className="text-xs font-bold text-[var(--primary)]">{Math.min(sectionIndex, VISIBLE_SECTION_COUNT)}/{VISIBLE_SECTION_COUNT} Sections</span>
               </div>
               <div className="w-full bg-[var(--surface)] rounded-full h-2.5">
-                <div className="bg-gradient-to-r from-violet-500 to-emerald-500 h-2.5 rounded-full transition-all duration-700 ease-out" style={{ width: `${(Math.min(sectionIndex, 15) / 15) * 100}%` }} />
+                <div className="bg-gradient-to-r from-violet-500 to-emerald-500 h-2.5 rounded-full transition-all duration-700 ease-out" style={{ width: `${(Math.min(sectionIndex, VISIBLE_SECTION_COUNT) / VISIBLE_SECTION_COUNT) * 100}%` }} />
               </div>
             </div>
 
@@ -982,7 +1066,7 @@ export default function ApplyPage() {
                 <div className="card !p-3 sticky top-24">
                   <p className="text-[10px] uppercase tracking-wider text-[var(--muted)] font-semibold px-2 mb-2">Section Checklist</p>
                   <div className="space-y-0.5 max-h-[26rem] overflow-y-auto">
-                    {(Object.keys(SECTION_LABELS) as (keyof ProposalSections)[]).map((key, idx) => {
+                    {VISIBLE_SECTION_KEYS.map((key, idx) => {
                       const isCovered = idx < sectionIndex;
                       const isAsking = idx === sectionIndex;
                       return (
@@ -1017,9 +1101,9 @@ export default function ApplyPage() {
                         </div>
                         <div className="bg-[var(--surface)] rounded-2xl rounded-tl-sm px-4 py-3 max-w-[80%]">
                           <p className="text-sm text-[var(--foreground)] leading-relaxed">
-                            Hi! I&apos;m your AI proposal assistant. I&apos;ll guide you through <strong>all 15 sections</strong> to build a comprehensive proposal for <strong>{contract.title as string}</strong>.
+                            Hi! I&apos;m your AI proposal assistant. I&apos;ll guide you through <strong>all 14 sections</strong> to build a comprehensive proposal for <strong>{contract.title as string}</strong>.
                             {rfpAnalysis && <> I&apos;ve analyzed the RFP and will tailor my questions to the requirements.</>}
-                            {" "}Let&apos;s start with <strong>Section 1: Vendor Basic Information</strong> — tell me your company name, primary contact, email, phone, address, and years of experience.
+                            {" "}Let&apos;s start with <strong>Section 1: Company Profile</strong> — tell me your core services, industries served, number of employees, certifications, and a brief company description.
                           </p>
                         </div>
                       </div>
@@ -1059,17 +1143,28 @@ export default function ApplyPage() {
 
                   {/* Input */}
                   <div className="border-t border-[var(--divider)] p-4 bg-[var(--surface)]/50">
-                    <form onSubmit={(e) => { e.preventDefault(); handleSendChat(); }} className="flex gap-3">
-                      <input
-                        value={chatInput}
-                        onChange={(e) => setChatInput(e.target.value)}
-                        placeholder="Type your response..."
-                        disabled={chatLoading}
-                        className="input-field !rounded-xl disabled:opacity-50"
-                      />
-                      <button type="submit" disabled={chatLoading || !chatInput.trim()} className="bg-[var(--primary)] text-[#EFECE3] px-5 py-2.5 rounded-full text-sm font-semibold hover:bg-[var(--primary-hover)] disabled:opacity-50 transition-all shadow-sm">
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" /></svg>
-                      </button>
+                    <form onSubmit={(e) => { e.preventDefault(); handleSendChat(); }} className="space-y-2">
+                      <div className="flex gap-3">
+                        <input
+                          value={chatInput}
+                          onChange={(e) => setChatInput(e.target.value)}
+                          placeholder="Type your response..."
+                          disabled={chatLoading}
+                          maxLength={1200}
+                          className="input-field !rounded-xl flex-1 disabled:opacity-50"
+                        />
+                        <button
+                          type="submit"
+                          disabled={chatLoading || !chatInput.trim() || chatInput.length > 1200}
+                          className="bg-[var(--primary)] text-[#EFECE3] px-5 py-2.5 rounded-full text-sm font-semibold hover:bg-[var(--primary-hover)] disabled:opacity-50 transition-all shadow-sm"
+                        >
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" /></svg>
+                        </button>
+                      </div>
+                      <div className="flex items-center justify-between text-[11px] text-[var(--muted)]">
+                        <span>{chatInput.length}/1200 characters</span>
+                        {chatInput.length >= 1200 && <span className="text-amber-600">Maximum length reached</span>}
+                      </div>
                     </form>
                   </div>
                 </div>
@@ -1104,7 +1199,7 @@ export default function ApplyPage() {
 
                 {/* Section Summary */}
                 <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
-                  {(Object.keys(SECTION_LABELS) as (keyof ProposalSections)[]).map((key) => (
+                  {VISIBLE_SECTION_KEYS.map((key) => (
                     <div key={key} className={`px-2 py-1.5 rounded-lg text-center ${sections[key] ? "bg-[var(--primary-light)]/80" : "bg-[var(--surface)]"}`}>
                       <p className="text-[9px] text-[var(--muted)] truncate">{SECTION_LABELS[key]}</p>
                       {sections[key] ? (
@@ -1140,7 +1235,7 @@ export default function ApplyPage() {
                 Back
               </button>
               {chatMessages.length > 0 && (
-                <p className="text-xs text-[var(--muted)]">{chatMessages.filter((m) => m.role === "user").length} responses &middot; {Math.min(sectionIndex, 15)}/15 sections covered</p>
+                <p className="text-xs text-[var(--muted)]">{chatMessages.filter((m) => m.role === "user").length} responses &middot; {Math.min(sectionIndex, VISIBLE_SECTION_COUNT)}/{VISIBLE_SECTION_COUNT} sections covered</p>
               )}
             </div>
           </div>
@@ -1242,7 +1337,7 @@ export default function ApplyPage() {
                 <div className="card !p-3 sticky top-24">
                   <p className="text-[10px] uppercase tracking-wider text-[var(--muted)] font-semibold px-2 mb-2">Sections</p>
                   <div className="space-y-0.5">
-                    {(Object.keys(SECTION_LABELS) as (keyof ProposalSections)[]).map((key) => (
+                    {VISIBLE_SECTION_KEYS.map((key) => (
                       <button
                         key={key}
                         onClick={() => setActiveEditorSection(key)}
@@ -1266,7 +1361,7 @@ export default function ApplyPage() {
                     onChange={(e) => setActiveEditorSection(e.target.value as keyof ProposalSections)}
                     className="input-field !rounded-xl"
                   >
-                    {(Object.keys(SECTION_LABELS) as (keyof ProposalSections)[]).map((key) => (
+                    {VISIBLE_SECTION_KEYS.map((key) => (
                       <option key={key} value={key}>{SECTION_LABELS[key]} {sections[key] ? "✓" : ""}</option>
                     ))}
                   </select>
@@ -1283,11 +1378,13 @@ export default function ApplyPage() {
 
                   <textarea
                     value={sections[activeEditorSection]}
-                    onChange={(e) => setSections((prev) => ({ ...prev, [activeEditorSection]: e.target.value }))}
+                    onChange={(e) => setSections((prev) => ({ ...prev, [activeEditorSection]: e.target.value.slice(0, 1200) }))}
                     rows={12}
+                    maxLength={1200}
                     placeholder={`Write your ${SECTION_LABELS[activeEditorSection].toLowerCase()} here...`}
                     className="input-field !rounded-xl !leading-relaxed resize-y"
                   />
+                  <p className="text-[11px] text-[var(--muted)] mt-2 text-right">{String(sections[activeEditorSection] || "").length}/1200 characters</p>
 
                   {/* AI Edit Section */}
                   <div className="mt-4 pt-4 border-t border-[var(--divider)]">
@@ -1329,7 +1426,7 @@ export default function ApplyPage() {
                 {/* Quick Section Navigation */}
                 <div className="flex justify-between">
                   {(() => {
-                    const keys = Object.keys(SECTION_LABELS) as (keyof ProposalSections)[];
+                    const keys = VISIBLE_SECTION_KEYS;
                     const idx = keys.indexOf(activeEditorSection);
                     return (
                       <>
