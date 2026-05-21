@@ -66,8 +66,12 @@ async function recognizeImage(imageBuffer: Buffer): Promise<string> {
 async function ocrPdfBuffer(buffer: Buffer, maxPages = 20): Promise<{ text: string; pageCount: number }> {
   const pdfjs = await loadPdfJs();
   // Load the native canvas binding only at runtime so Turbopack does not try to bundle it.
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const { createCanvas } = require("@napi-rs/canvas");
+  // Load the native canvas binding only at runtime so webpack does not try
+  // to bundle the .node binary. Use `eval('require')` to avoid static
+  // analysis by bundlers that would attempt to parse the native file.
+  // eslint-disable-next-line @typescript-eslint/no-implied-eval
+  const req: NodeRequire = eval("require");
+  const { createCanvas } = req("@napi-rs/canvas");
   const loadingTask = pdfjs.getDocument({
     data: buffer,
     useWorkerFetch: false,

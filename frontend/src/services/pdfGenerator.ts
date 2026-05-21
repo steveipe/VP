@@ -115,14 +115,21 @@ function createPdfWorker() {
 
   const worker = new Worker(new URL("./pdfGenerator.worker.ts", import.meta.url), { type: "module" });
 
-  worker.addEventListener("message", (event: MessageEvent<PdfWorkerResponse>) => {
+  worker.addEventListener("message", (event: MessageEvent<any>) => {
     const response = event.data;
     const handlers = pdfWorkerPromises.get(response.id);
     if (!handlers) return;
     pdfWorkerPromises.delete(response.id);
 
     if (response.success) {
-      handlers.resolve(response.blob);
+      try {
+        // worker sends ArrayBuffer as transferable; reconstruct Blob
+        const buffer = response.buffer as ArrayBuffer;
+        const blob = new Blob([buffer], { type: "application/pdf" });
+        handlers.resolve(blob);
+      } catch (err) {
+        handlers.reject(err);
+      }
     } else {
       handlers.reject(new Error(response.error || "PDF worker failed"));
     }

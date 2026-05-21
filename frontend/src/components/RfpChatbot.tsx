@@ -99,6 +99,27 @@ interface EditorDraftSnapshot {
 
 type TargetRfp = "full" | string;
 
+const QUESTION_LABEL_BY_KEY = new Map(RFP_QUESTIONS.map((question) => [question.key, question.label]));
+
+function getQuestionLabelByKey(key: string | null | undefined): string {
+  if (!key) return "";
+  if (key === FINAL_INTAKE_KEY) return getFinalIntakeQuestionLabel();
+  return QUESTION_LABEL_BY_KEY.get(key) || key;
+}
+
+function getRequiredProgress(answers: Record<string, string>) {
+  const requiredKeys = INTAKE_ORDER;
+  const completed = requiredKeys.filter((key) => Boolean(answers[key]?.trim())).length;
+  const missingKeys = requiredKeys.filter((key) => !answers[key]?.trim());
+
+  return {
+    completed,
+    total: requiredKeys.length,
+    missingKeys,
+    missingLabels: missingKeys.map((key) => getQuestionLabelByKey(key)),
+  };
+}
+
 function getNextRequiredKey(answers: Record<string, string>): string | null {
   for (const key of INTAKE_ORDER) {
     const value = answers[key];
@@ -146,7 +167,7 @@ export default function RfpChatbot({ onSaved, contractId, onRfpGenerated }: RfpC
   const [forcedQuestionKey, setForcedQuestionKey] = useState<string | null>(null);
   const [generationSnapshot, setGenerationSnapshot] = useState(getBackgroundGenerationSnapshot());
   const [messages, setMessages] = useState<ChatMessage[]>([
-    { role: "bot", text: "Welcome! I will collect 19 RFP details one by one." },
+    { role: "bot", text: "I’m going to be a little yappy here on purpose — I’ll walk you through the RFP, explain what each answer is doing, and keep flagging anything missing so we can fill it in together." },
     { role: "bot", text: RFP_QUESTIONS[0].label },
   ]);
   const [progress, setProgress] = useState<PipelineProgress | null>(null);
@@ -336,6 +357,7 @@ export default function RfpChatbot({ onSaved, contractId, onRfpGenerated }: RfpC
 
   const intakeComplete = getNextRequiredKey(answers) === null;
   const qaSuggestionsResolved = !qaReview || qaReview.improvements.every((_, index) => qaSuggestionStates[index]?.mode);
+  const intakeProgress = getRequiredProgress(answers);
 
   const buildQaRevisionNotes = useCallback(() => {
     if (!qaReview) return "";
@@ -509,19 +531,22 @@ export default function RfpChatbot({ onSaved, contractId, onRfpGenerated }: RfpC
       }
 
       const nextQuestionKey = data.nextQuestionKey || getNextRequiredKey(mergedAnswers);
+      const nextLabel = getQuestionLabelByKey(nextQuestionKey);
       const botMessage =
         data.chatReply ||
         data.clarifyingQuestion ||
-        (!nextQuestionKey && data.readyForGeneration
-          ? "I have enough information to generate the RFP. Click **Generate RFP** when you're ready."
-          : "");
+        (nextQuestionKey
+          ? `Nice, that helps. Next I need: ${nextLabel || nextQuestionKey}. You can answer briefly, or say "auto" if you want me to infer it from the RFP and keep moving.`
+          : data.readyForGeneration
+            ? "Great — I have enough information to generate the RFP. If you want, you can still add any last-minute details before clicking **Generate RFP**."
+            : "I’m still checking for any missing details so I can keep the RFP complete and consistent.");
 
       if (botMessage) {
         setMessages((prev) => [...prev, { role: "bot", text: botMessage }]);
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      setMessages((prev) => [...prev, { role: "bot", text: `I couldn't parse that yet: ${msg}` }]);
+      setMessages((prev) => [...prev, { role: "bot", text: `I couldn't parse that yet, but we can still fix it together: ${msg}` }]);
     } finally {
       setIntaking(false);
     }
@@ -538,7 +563,7 @@ export default function RfpChatbot({ onSaved, contractId, onRfpGenerated }: RfpC
     const missingKey = getNextRequiredKey(answers);
     if (missingKey) {
       setForcedQuestionKey(missingKey);
-      setMessages((prev) => [...prev, { role: "bot", text: `I still need one more answer: ${RFP_QUESTIONS.find((q) => q.key === missingKey)?.label || missingKey}` }]);
+      setMessages((prev) => [...prev, { role: "bot", text: `I still need one more answer: ${getQuestionLabelByKey(missingKey)}. If you know it, send it over; if not, say "auto" and I’ll try to infer it from the RFP while I keep explaining what I’m looking for.` }]);
       return;
     }
 
@@ -575,7 +600,7 @@ export default function RfpChatbot({ onSaved, contractId, onRfpGenerated }: RfpC
           ...prev,
           {
             role: "bot",
-            text: `Before I score the draft, I still need: ${data.missingQuestionLabel || (key ? RFP_QUESTIONS.find((q) => q.key === key)?.label : "one missing answer") || "one missing answer"}`,
+            text: `Before I score the draft, I still need: ${data.missingQuestionLabel || getQuestionLabelByKey(key) || "one missing answer"}. If you know it, send it over; if not, say "auto" and I’ll try to infer it from the RFP while I keep explaining what I’m looking for.`,
           },
         ]);
         return;
@@ -976,6 +1001,17 @@ export default function RfpChatbot({ onSaved, contractId, onRfpGenerated }: RfpC
       {/* Chat messages */}
       {wizardStep === 1 && (
         <div ref={chatScrollRef} style={{ height: 400, overflowY: "auto", padding: "16px 20px" }}>
+          <div style={{ background: "var(--surface)", border: "1px solid var(--card-border)", borderRadius: 12, padding: 12, marginBottom: 12, fontSize: 13, color: "var(--muted)", lineHeight: 1.6 }}>
+            <div style={{ fontWeight: 600, color: "var(--foreground)", marginBottom: 4 }}>
+              Intake progress: {intakeProgress.completed}/{intakeProgress.total}
+            </div>
+            <div>I’ll keep asking the defined questions, and if something is missing I’ll point it out clearly.</div>
+            {intakeProgress.missingLabels.length > 0 && (
+              <div style={{ marginTop: 6 }}>
+                Still missing: {intakeProgress.missingLabels.slice(0, 3).join(", ")}{intakeProgress.missingLabels.length > 3 ? `, +${intakeProgress.missingLabels.length - 3} more` : ""}
+              </div>
+            )}
+          </div>
           {messages.map((msg, idx) => (
             <div key={idx} style={{ display: "flex", justifyContent: msg.role === "user" ? "flex-end" : "flex-start", marginBottom: 8 }}>
               <div

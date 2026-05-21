@@ -1,32 +1,32 @@
 export async function extractTextFromPDF(file: File): Promise<string> {
   const arrayBuffer = await file.arrayBuffer();
-  const bytes = new Uint8Array(arrayBuffer);
-  const raw = new TextDecoder("latin1").decode(bytes);
+  const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
 
-  // Heuristic extraction for client-side previews when full parser is unavailable.
-  const chunks: string[] = [];
-  const tjRegex = /\(([^()]*)\)\s*Tj/g;
-  let tjMatch: RegExpExecArray | null;
-  while ((tjMatch = tjRegex.exec(raw)) !== null) {
-    if (tjMatch[1]) chunks.push(tjMatch[1]);
+  if (typeof window !== "undefined") {
+    pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
   }
 
-  const tjArrayRegex = /\[((?:\([^\)]*\)\s*)+)\]\s*TJ/g;
-  let arrMatch: RegExpExecArray | null;
-  while ((arrMatch = tjArrayRegex.exec(raw)) !== null) {
-    const parts = Array.from(arrMatch[1].matchAll(/\(([^()]*)\)/g)).map((m) => m[1]);
-    if (parts.length > 0) chunks.push(parts.join(" "));
+  const loadingTask = pdfjs.getDocument({
+    data: new Uint8Array(arrayBuffer),
+    useWorkerFetch: false,
+  });
+
+  const document = await loadingTask.promise;
+  const pageTexts: string[] = [];
+
+  for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber += 1) {
+    const page = await document.getPage(pageNumber);
+    const content = await page.getTextContent();
+    const text = content.items
+      .map((item) => (typeof item === "object" && item && "str" in item ? String((item as { str?: string }).str || "") : ""))
+      .join(" ")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    if (text) {
+      pageTexts.push(text);
+    }
   }
 
-  const text = chunks
-    .join("\n")
-    .replace(/\\\(/g, "(")
-    .replace(/\\\)/g, ")")
-    .replace(/\\n/g, "\n")
-    .replace(/\\r/g, "")
-    .replace(/\\t/g, " ")
-    .replace(/\s{2,}/g, " ")
-    .trim();
-
-  return text;
+  return pageTexts.join("\n\n").trim();
 }

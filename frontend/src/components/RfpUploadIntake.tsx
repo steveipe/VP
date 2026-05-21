@@ -151,9 +151,9 @@ export default function RfpUploadIntake() {
       <div className="px-5 pb-5">
         <div className="grid gap-5">
           <div className="text-center">
-            <div className="text-[20px] font-bold text-[var(--foreground)]">Upload Existing RFP</div>
+              <div className="text-[20px] font-bold text-[var(--foreground)]">Upload your vendor RFP PDF</div>
             <div className="mt-1.5 text-sm text-[var(--muted)]">
-              Use a PDF instead of the chatbot, then continue into the same QA analysis screen with score and suggestions.
+                If you already have the vendor RFP, upload the PDF and I’ll move it into the guided review flow with scores and suggestions.
             </div>
           </div>
 
@@ -195,9 +195,9 @@ export default function RfpUploadIntake() {
               )}
 
               <div className="grid gap-2 text-sm text-[var(--muted)]">
-                <div>Upload the PDF as the intake step.</div>
-                <div>After upload, analysis runs automatically and the review screen opens when it is ready.</div>
-                <div>The review screen also includes a save-without-changes action.</div>
+                <div>Upload the PDF to start intake.</div>
+                <div>I’ll analyze it automatically and open the review screen when it is ready.</div>
+                <div>You can also save the generated draft without making changes.</div>
               </div>
         </div>
       </div>

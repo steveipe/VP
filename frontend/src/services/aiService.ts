@@ -1,15 +1,16 @@
 import { supabase } from "@/services/supabase";
-import { apiUrl } from "@/lib/api";
 
 const AI_API_BASE_PATH = "/api/ai";
-const AI_API_BASE = apiUrl(AI_API_BASE_PATH);
+const AI_API_BASE = AI_API_BASE_PATH;
 
 function buildAIEndpoint(path: string, apiBaseUrl?: string): string {
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+
   if (apiBaseUrl) {
-    return new URL(`${AI_API_BASE_PATH}${path}`, apiBaseUrl).toString();
+    return new URL(`${AI_API_BASE_PATH}${normalizedPath}`, apiBaseUrl).toString();
   }
 
-  return apiUrl(`${AI_API_BASE_PATH}${path}`);
+  return `${AI_API_BASE_PATH}${normalizedPath}`;
 }
 
 export interface RFPInput {
@@ -365,7 +366,7 @@ export async function startBackgroundAnalysisJob(input: {
   contract: PipelineContract;
   vendors: VendorInput[];
 }): Promise<{ job_id: string }> {
-  const res = await fetch(apiUrl("/api/ai/analyze-proposal/background"), {
+  const res = await fetch("/api/ai/analyze-proposal/background", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
@@ -382,7 +383,7 @@ export async function startBackgroundAnalysisJob(input: {
 export async function getBackgroundAnalysisJob(jobId: string): Promise<AnalysisJobStatus | null> {
   try {
     const start = Date.now();
-    const res = await fetch(apiUrl(`/api/ai/analysis-jobs/${jobId}`), {
+    const res = await fetch(`/api/ai/analysis-jobs/${jobId}`, {
       method: "GET",
       headers: { "Content-Type": "application/json", Accept: "application/json", "Cache-Control": "no-cache" },
     });
@@ -490,17 +491,124 @@ export interface ParseRFPInput {
   contract_budget?: string;
   contract_deadline?: string;
   contract_industry?: string;
+  file_base64?: string;
+  file_name?: string;
+  content_type?: string;
 }
 
-export async function parseRFP(input: ParseRFPInput): Promise<RFPAnalysis> {
-  const res = await fetch(`${AI_API_BASE}/parse-rfp`, {
+export interface ParseRFPProgress {
+  status: "queued" | "running" | "completed" | "failed";
+  message: string;
+  percent: number;
+  elapsedMs: number;
+}
+
+type ParseRFPJobResponse = {
+  job: {
+    id: string;
+    status: "queued" | "running" | "completed" | "failed";
+    progress?: {
+      message?: string;
+      percent?: number;
+    };
+    result?: RFPAnalysis;
+    error?: string | null;
+    created_at: string;
+    updated_at: string;
+  };
+};
+
+export async function parseRFP(
+  input: ParseRFPInput,
+  onProgress?: (progress: ParseRFPProgress) => void
+): Promise<RFPAnalysis> {
+  console.log("[aiService] parseRFP called with:", {
+    rfp_text_length: input.rfp_text?.length || 0,
+    contract_title: input.contract_title,
+  });
+
+  const startedAt = Date.now();
+  const startEndpoint = "/api/ai/parse-rfp/background";
+  console.log("[aiService] Queueing parse job:", startEndpoint);
+
+  onProgress?.({
+    status: "queued",
+    message: "Queued for analysis",
+    percent: 5,
+    elapsedMs: 0,
+  });
+
+  const startRes = await fetch(startEndpoint, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
   });
-  if (!res.ok) throw new Error("Failed to parse RFP");
-  const data = await res.json();
-  return data.rfp_analysis;
+
+  if (!startRes.ok) {
+    const error = await startRes.text();
+    console.error("[aiService] Failed to queue parse job:", error);
+    throw new Error(`Failed to queue RFP parse job: ${error}`);
+  }
+
+  const startData = await startRes.json();
+  const jobId = startData.job_id as string | undefined;
+
+  if (!jobId) {
+    throw new Error("RFP parse job id not returned");
+  }
+
+  console.log("[aiService] RFP parse job queued:", { jobId });
+
+  const maxWaitMs = 180000;
+  const pollIntervalMs = 1200;
+
+  while (Date.now() - startedAt < maxWaitMs) {
+    const elapsedMs = Date.now() - startedAt;
+    const pollEndpoint = `/api/ai/parse-rfp/jobs/${jobId}`;
+    const pollRes = await fetch(pollEndpoint, {
+      method: "GET",
+      headers: { "Content-Type": "application/json", Accept: "application/json", "Cache-Control": "no-cache" },
+    });
+
+    if (!pollRes.ok) {
+      const error = await pollRes.text();
+      console.error("[aiService] Failed polling parse job:", { jobId, error });
+      throw new Error(`Failed polling RFP parse job: ${error}`);
+    }
+
+    const pollData = (await pollRes.json()) as ParseRFPJobResponse;
+    const job = pollData.job;
+    const message = job?.progress?.message || "Analyzing RFP";
+    const percent = Math.max(0, Math.min(100, Number(job?.progress?.percent ?? 0)));
+    const status = job?.status || "running";
+
+    onProgress?.({ status, message, percent, elapsedMs });
+
+    console.log("[aiService] parseRFP job status:", {
+      jobId,
+      status,
+      percent,
+      message,
+      elapsedMs,
+    });
+
+    if (status === "completed") {
+      const analysis = job.result;
+      if (!analysis) {
+        throw new Error("RFP parse job completed without result");
+      }
+
+      return analysis;
+    }
+
+    if (status === "failed") {
+      throw new Error(job.error || "RFP parse job failed");
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+  }
+
+  throw new Error("RFP analysis timed out. Please try again.");
 }
 
 export interface ChatMessage {
@@ -519,7 +627,17 @@ export async function proposalChat(
   rfpContext: string,
   sectionIndex: number
 ): Promise<ProposalChatResponse> {
-  const res = await fetch(`${AI_API_BASE}/proposal-chat`, {
+  console.log("[aiService] proposalChat called with:", {
+    messages_count: messages.length,
+    rfp_context_length: rfpContext.length,
+    section_index: sectionIndex,
+  });
+
+  // Use relative path to call frontend API route (not backend)
+  const endpoint = "/api/ai/proposal-chat";
+  console.log("[aiService] Fetching:", endpoint);
+
+  const res = await fetch(endpoint, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -528,8 +646,22 @@ export async function proposalChat(
       section_index: sectionIndex,
     }),
   });
-  if (!res.ok) throw new Error("Failed to get chat response");
+
+  console.log("[aiService] Response status:", res.status);
+
+  if (!res.ok) {
+    const error = await res.text();
+    console.error("[aiService] Chat error response:", error);
+    throw new Error(`Failed to get chat response: ${error}`);
+  }
+
   const data = await res.json();
+  console.log("[aiService] Chat response received:", {
+    reply_length: data.reply?.length || 0,
+    proposal_ready: data.proposal_ready,
+    next_section_index: data.section_index,
+  });
+
   return data;
 }
 

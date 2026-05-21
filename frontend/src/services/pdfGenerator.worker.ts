@@ -30,8 +30,10 @@ self.addEventListener("message", async (event) => {
 
   try {
     const blob = generateProposalPDF(input).output("blob");
-    const response: PdfWorkerSuccessResponse = { id, success: true, blob };
-    self.postMessage(response, [blob]);
+    // Transfer as ArrayBuffer to ensure transferable type across browsers/workers
+    const ab = await blob.arrayBuffer();
+    const response = { id, success: true, buffer: ab };
+    self.postMessage(response);
   } catch (error) {
     const err = error instanceof Error ? error : new Error(String(error));
     const response: PdfWorkerErrorResponse = {
