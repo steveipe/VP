@@ -90,13 +90,13 @@ export async function getNotifications(userId: string) {
 
 // User profile operations
 export async function getUserProfile(userId: string): Promise<UserProfile | null> {
-  const { data, error } = await supabase.from("profiles").select("*").eq("id", userId).single();
+  const { data, error } = await supabase.from("users").select("*").eq("id", userId).single();
   if (error && error.code !== "PGRST116") throw error; // PGRST116 = row not found
   return data || null;
 }
 
 export async function updateUserProfile(userId: string, profile: Partial<UserProfile>) {
-  const { data, error } = await supabase.from("profiles").update(profile).eq("id", userId).select();
+  const { data, error } = await supabase.from("users").update(profile).eq("id", userId).select();
   if (error) throw error;
   return data?.[0];
 }

@@ -27,7 +27,6 @@ import {
   type ProposalCritique,
   type ExpandProgress,
 } from "@/services/aiService";
-import { TEMPLATE_OPTIONS, type TemplateName } from "@/services/pdfGenerator";
 import { supabase } from "@/services/supabase";
 
 /** Ensure every section value is a plain string (LLMs sometimes return objects). */
@@ -39,16 +38,45 @@ function normalizeSections(
 ): ProposalSections {
   const out = buildProposalSections(fallbackText || "Uploaded proposal", vendorName, contractTitle);
 
-  for (const [k, v] of Object.entries(raw)) {
-    if (typeof v === "string" && v.trim()) out[k as keyof ProposalSections] = v;
+  // Build reverse lookup from human labels to canonical keys
+  const labelToKey = Object.entries(SECTION_LABELS).reduce((acc, [key, label]) => {
+    acc[label.toLowerCase()] = key;
+    // also map a simplified label form (spaces/underscores removed)
+    acc[label.toLowerCase().replace(/[^a-z0-9]/g, "")] = key;
+    return acc;
+  }, {} as Record<string, string>);
+
+  for (const [rawKey, v] of Object.entries(raw)) {
+    // Normalize incoming key: could be canonical, human label, or varied casing
+    const keyCandidate = String(rawKey || "");
+    const lookupKey = keyCandidate.toLowerCase();
+    const compactLookup = lookupKey.replace(/[^a-z0-9]/g, "");
+
+    let targetKey: string | undefined = undefined;
+    if ((out as any)[keyCandidate] !== undefined) {
+      targetKey = keyCandidate;
+    } else if (labelToKey[lookupKey]) {
+      targetKey = labelToKey[lookupKey];
+    } else if (labelToKey[compactLookup]) {
+      targetKey = labelToKey[compactLookup];
+    } else {
+      // try to coerce common variants: replace spaces with underscores
+      const alt = lookupKey.replace(/\s+/g, "_");
+      if ((out as any)[alt] !== undefined) targetKey = alt;
+    }
+
+    // Fallback: if no matching canonical key, skip unknown keys
+    if (!targetKey) continue;
+
+    if (typeof v === "string" && v.trim()) (out as any)[targetKey] = v;
     else if (v && typeof v === "object") {
       const flattened = Object.entries(v as Record<string, unknown>)
         .map(([field, val]) => `${field}: ${String(val ?? "")}`)
         .join("\n")
         .trim();
-      if (flattened) out[k as keyof ProposalSections] = flattened;
+      if (flattened) (out as any)[targetKey] = flattened;
     } else if (v != null && String(v).trim()) {
-      out[k as keyof ProposalSections] = String(v);
+      (out as any)[targetKey] = String(v);
     }
   }
 
@@ -76,8 +104,6 @@ const SECTION_LABELS: Record<keyof ProposalSections, string> = {
 const VISIBLE_SECTION_KEYS = Object.keys(SECTION_LABELS) as (keyof ProposalSections)[];
 const VISIBLE_SECTION_COUNT = VISIBLE_SECTION_KEYS.length;
 
-const TEMPLATE_OPTIONS_LIST = TEMPLATE_OPTIONS;
-
 function renderDescription(text: string): React.ReactNode {
   return text.split("\n").map((line, i) => (
     line.trim() ? <div key={i}>{line}</div> : <br key={i} />
@@ -94,7 +120,7 @@ async function readTextFromFile(file: File): Promise<string> {
   return file.text();
 }
 
-type Step = "rfp_upload" | "choice" | "chat_build" | "upload_edit" | "editor" | "preview";
+type Step = "rfp_upload" | "choice" | "chat_build" | "editor" | "preview";
 
 export default function ApplyPage() {
   const router = useRouter();
@@ -162,8 +188,7 @@ export default function ApplyPage() {
   /* ─── Generating full proposal ─── */
   const [generatingProposal, setGeneratingProposal] = useState(false);
 
-  /* ─── Template & Charts ─── */
-  const [selectedTemplate, setSelectedTemplate] = useState<TemplateName>("executive");
+  /* ─── Charts ─── */
   const [chartData, setChartData] = useState<ChartData | null>(null);
   const [extractingCharts, setExtractingCharts] = useState(false);
 
@@ -179,6 +204,7 @@ export default function ApplyPage() {
 
   /* ─── PDF Preview ─── */
   const [pdfPreviewUrl, setPdfPreviewUrl] = useState<string | null>(null);
+  const [pdfDownloadUrl, setPdfDownloadUrl] = useState<string | null>(null);
   const [pdfPreviewGenerating, setPdfPreviewGenerating] = useState(false);
   const [pdfPreviewProgressPercent, setPdfPreviewProgressPercent] = useState(0);
   const [pdfPreviewProgressMessage, setPdfPreviewProgressMessage] = useState("Queued for PDF generation");
@@ -198,7 +224,6 @@ export default function ApplyPage() {
         proposalTitle: string;
         totalPrice: string;
         timelineSummary: string;
-        selectedTemplate: TemplateName;
         chartData: ChartData | null;
         executiveSummary: string;
         sections: ProposalSections;
@@ -214,7 +239,6 @@ export default function ApplyPage() {
       if (parsed.proposalTitle) setProposalTitle(parsed.proposalTitle);
       if (parsed.totalPrice) setTotalPrice(parsed.totalPrice);
       if (parsed.timelineSummary) setTimelineSummary(parsed.timelineSummary);
-      if (parsed.selectedTemplate) setSelectedTemplate(parsed.selectedTemplate);
       if (parsed.chartData) setChartData(parsed.chartData);
       if (parsed.executiveSummary) setExecutiveSummary(parsed.executiveSummary);
       if (parsed.sections) setSections(parsed.sections);
@@ -238,7 +262,6 @@ export default function ApplyPage() {
         proposalTitle,
         totalPrice,
         timelineSummary,
-        selectedTemplate,
         chartData,
         executiveSummary,
         sections,
@@ -250,7 +273,7 @@ export default function ApplyPage() {
     } catch (err) {
       console.warn("Failed to save state:", err);
     }
-  }, [step, generatingProposal, showPdfOptions, proposalTitle, totalPrice, timelineSummary, selectedTemplate, chartData, executiveSummary, sections, proposalReady, sectionIndex, rfpTitle, rfpText]);
+  }, [step, generatingProposal, showPdfOptions, proposalTitle, totalPrice, timelineSummary, chartData, executiveSummary, sections, proposalReady, sectionIndex, rfpTitle, rfpText]);
 
   /* ─── Auto-scroll chat ─── */
   useEffect(() => {
@@ -337,10 +360,13 @@ export default function ApplyPage() {
       const title = file.name.replace(/\.[^/.]+$/, "");
       setRfpTitle(title);
       
+      const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+      const rfpTextForRequest = isPdf && text.trim().length < 120 ? "" : text.trim();
+
       console.log("[Apply] Starting RFP analysis...");
       // Analyze the RFP
       const analysis = await parseRFP({
-        rfp_text: text,
+        rfp_text: rfpTextForRequest,
         contract_title: file.name,
         contract_description: "",
         contract_budget: "",
@@ -408,11 +434,33 @@ export default function ApplyPage() {
         profile?.company_name || "Vendor",
         rfpTitle
       );
-      setSections(normalizeSections(proposal.sections));
+      const normalizedSections = normalizeSections(proposal.sections);
+      setSections(normalizedSections);
       setProposalTitle(proposal.proposal_title);
       setTotalPrice(proposal.total_price);
       setTimelineSummary(proposal.timeline_summary);
       setShowPdfOptions(true);
+
+      // Expand generated section content immediately so the editor shows richer, proposal-ready text.
+      setExpanding(true);
+      setExpandProgress(null);
+      try {
+        const expanded = await expandAllSections(
+          normalizedSections,
+          getRfpContext(),
+          profile?.company_name || "Vendor",
+          rfpTitle,
+          (p) => setExpandProgress(p)
+        );
+        setSections(normalizeSections(expanded.sections));
+        if (expanded.executiveSummary) setExecutiveSummary(expanded.executiveSummary);
+      } catch {
+        // If expansion fails, keep the generated proposal sections and continue.
+      } finally {
+        setExpanding(false);
+      }
+
+      setStep("editor");
     } catch {
       alert("Failed to generate proposal. Please try again.");
     }
@@ -589,10 +637,9 @@ export default function ApplyPage() {
     timeline: timelineSummary,
     sections,
     sectionLabels: SECTION_LABELS,
-    template: selectedTemplate,
     chartData,
     executiveSummary,
-  }), [proposalTitle, profile?.company_name, rfpTitle, totalPrice, timelineSummary, sections, selectedTemplate, chartData, executiveSummary]);
+  }), [proposalTitle, profile?.company_name, rfpTitle, totalPrice, timelineSummary, sections, chartData, executiveSummary]);
 
   const handleDownloadPDF = () => {
     void (async () => {
@@ -600,7 +647,7 @@ export default function ApplyPage() {
         const response = await fetch(apiUrl("/api/vendor/pdf/generate/background"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ vendorResponse: getPdfInput(), options: { template: selectedTemplate } }),
+          body: JSON.stringify({ vendorResponse: getPdfInput(), options: {} }),
         });
         if (!response.ok) throw new Error("Failed to queue PDF job");
         const { job_id: jobId } = await response.json();
@@ -616,9 +663,17 @@ export default function ApplyPage() {
           if (!statusResp.ok) continue;
           const statusJson = await statusResp.json();
           const job = statusJson.job || statusJson;
-          if (job?.status === "completed" && job?.pdf_base64) {
-            pdfBase64 = job.pdf_base64;
-            break;
+          if (job?.status === "completed") {
+            setPdfDownloadUrl(job?.result?.download_url || null);
+            if (job?.pdf_base64) {
+              pdfBase64 = job.pdf_base64;
+              break;
+            }
+            if (job?.result?.download_url) {
+              const downloadUrl = job.result.download_url as string;
+              window.open(downloadUrl, "_blank");
+              return;
+            }
           }
           if (job?.status === "failed") throw new Error(job.error || "PDF job failed");
         }
@@ -652,23 +707,23 @@ export default function ApplyPage() {
         setPdfPreviewGenerating(true);
         setPdfPreviewProgressPercent(15);
         setPdfPreviewProgressMessage("Preparing PDFShift job");
-        // Queue server-side PDF generation via backend (PDFShift) for authoritative rendering
-        const backendUrl = (await import("@/lib/api")).apiUrl;
-        const resp = await fetch(backendUrl("/api/vendor/pdf/generate/background"), {
+        // Queue server-side PDF generation on the backend so PDFShift runs server-side
+        const resp = await fetch(apiUrl("/api/vendor/pdf/generate/background"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ vendorResponse: getPdfInput(), options: { template: selectedTemplate } }),
+          body: JSON.stringify({ vendorResponse: getPdfInput(), options: {} }),
         });
         if (!resp.ok) throw new Error("Failed to queue PDF job");
         const data = await resp.json();
-        const jobId = data.job_id;
+        const jobId = data.job_id || data.job_id?.toString();
         if (!jobId) throw new Error("No job id returned from PDF queue");
 
-        // Poll for PDF job on backend
-        const pollUrl = backendUrl(`/api/vendor/pdf/generate/jobs/${jobId}`);
+        // Poll for PDF job on backend (PDFShift path)
+        const pollUrl = apiUrl(`/api/vendor/pdf/generate/jobs/${jobId}`);
         let attempts = 0;
         let pdfBase64: string | null = null;
-        while (attempts < 120 && !cancelled) {
+        const maxAttempts = 240;
+        while (attempts < maxAttempts && !cancelled) {
           await new Promise((r) => setTimeout(r, 1500));
           attempts++;
           try {
@@ -677,19 +732,35 @@ export default function ApplyPage() {
             const statusJson = await statusResp.json();
             const job = statusJson.job || statusJson;
             if (!job) continue;
-            if (job.progress?.step === "rendering HTML from vendor response") {
+            setPdfDownloadUrl(job?.result?.download_url || null);
+            // Map progress updates from either backend or frontend job shape
+            if (job.progress?.step === "rendering HTML from vendor response" || job.progress?.message === "Rendering HTML") {
               setPdfPreviewProgressPercent(35);
               setPdfPreviewProgressMessage("Rendering proposal HTML");
-            } else if (job.progress?.step === "calling PDFShift API") {
+            } else if (job.progress?.step === "calling PDFShift API" || job.progress?.message === "Calling PDFShift") {
               setPdfPreviewProgressPercent(75);
               setPdfPreviewProgressMessage("Calling PDFShift");
             } else if (job.status === "completed") {
               setPdfPreviewProgressPercent(100);
               setPdfPreviewProgressMessage("PDF ready");
             }
-            if (job.status === "completed" && job.pdf_base64) {
-              pdfBase64 = job.pdf_base64;
-              break;
+
+            // Frontend local job stores may include result.pdf_base64 or pdf_base64 directly
+            if (job.status === "completed") {
+              if (job.pdf_base64) {
+                pdfBase64 = job.pdf_base64;
+                break;
+              }
+              if (job.result?.pdf_base64) {
+                pdfBase64 = job.result.pdf_base64;
+                break;
+              }
+              if (job.result?.download_url) {
+                if (!cancelled) {
+                  setPdfPreviewUrl(job.result.download_url as string);
+                }
+                return;
+              }
             }
             if (job.status === "failed") throw new Error(job.error || "PDF job failed");
           } catch (e) {
@@ -697,7 +768,10 @@ export default function ApplyPage() {
           }
         }
 
-        if (!pdfBase64) throw new Error("PDF job did not complete in time");
+        if (!pdfBase64) {
+          console.error(`PDF job timeout after ${attempts} attempts of ${maxAttempts}`);
+          throw new Error(`PDF job did not complete in time (${attempts}/${maxAttempts} attempts)`);
+        }
         const binary = atob(pdfBase64);
         const len = binary.length;
         const bytes = new Uint8Array(len);
@@ -784,7 +858,7 @@ export default function ApplyPage() {
     try {
       const safeName = (proposalTitle || "proposal").replace(/[^a-zA-Z0-9]/g, "_");
 
-      const proposalData = {
+      const proposalPayload = {
         title: proposalTitle || "Vendor Proposal",
         vendorName: profile?.company_name || "Vendor",
         contractTitle: rfpTitle,
@@ -792,31 +866,103 @@ export default function ApplyPage() {
         timeline: timelineSummary,
         sections,
         sectionLabels: SECTION_LABELS,
-        template: selectedTemplate,
-        chartData: chartData || null,
-        executiveSummary: executiveSummary || "",
       };
 
-      const { error: proposalError } = await supabase.from("proposals").insert({
-        id: crypto.randomUUID(),
-        contract_id: null,
-        vendor_id: user.id,
+      const submissionPayload = {
+        ...proposalPayload,
         vendor_name: profile?.company_name || "Unknown",
         price: totalPrice,
         timeline: timelineSummary,
         experience: sections.past_experience.slice(0, 500),
-        proposal_data: JSON.stringify(proposalData),
+        proposal_data: JSON.stringify(proposalPayload),
         proposal_file_name: `${safeName}.pdf`,
         proposal_type: "generated",
         ai_score: null,
         risk_level: null,
         created_at: new Date().toISOString(),
+      };
+
+      // Queue PDF generation job on the backend
+      const resp = await fetch(apiUrl("/api/vendor/pdf/generate/background"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ vendorResponse: getPdfInput(), options: {} }),
+      });
+      if (!resp.ok) throw new Error("Failed to queue PDF job");
+      const startData = await resp.json();
+      const jobId = startData.job_id;
+      if (!jobId) throw new Error("No job id returned from PDF queue");
+
+      const pollUrl = apiUrl(`/api/vendor/pdf/generate/jobs/${jobId}`);
+      let pdfBase64: string | null = null;
+      let attempts = 0;
+      while (attempts < 240) {
+        await new Promise((r) => setTimeout(r, 1500));
+        attempts++;
+        try {
+          const statusResp = await fetch(pollUrl);
+          if (!statusResp.ok) continue;
+          const statusJson = await statusResp.json();
+          const job = statusJson.job || statusJson;
+          if (!job) continue;
+          if (job.status === "completed") {
+            pdfBase64 = job.pdf_base64 || job.result?.pdf_base64 || null;
+            if (!pdfBase64 && job.result?.download_url) {
+              // fetch the generated file and convert to base64
+              try {
+                const fileResp = await fetch(job.result.download_url);
+                if (fileResp.ok) {
+                  const arrayBuffer = await fileResp.arrayBuffer();
+                  const uint8 = new Uint8Array(arrayBuffer);
+                  let binary = "";
+                  for (let i = 0; i < uint8.length; i++) binary += String.fromCharCode(uint8[i]);
+                  pdfBase64 = typeof window !== "undefined" ? window.btoa(binary) : Buffer.from(uint8).toString("base64");
+                }
+              } catch (e) {
+                console.debug("Failed fetching download_url for PDF job", e);
+              }
+            }
+            break;
+          }
+          if (job.status === "failed") throw new Error(job.error || "PDF job failed");
+        } catch (e) {
+          console.debug("PDF job poll error", e);
+        }
+      }
+
+      if (!pdfBase64) throw new Error("PDF job did not complete in time");
+
+      const uploadResp = await fetch("/api/vendor/pdf/upload", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId: user.id,
+          fileName: `${safeName}.pdf`,
+          pdfBase64,
+          bucket: process.env.NEXT_PUBLIC_SUPABASE_STORAGE_BUCKET || "proposals",
+          vendorName: profile?.company_name || user.email || "",
+          price: totalPrice || null,
+          timeline: timelineSummary || null,
+          contractTitle: proposalTitle || rfpTitle || "Vendor Proposal",
+          contractDescription: `Generated proposal for ${rfpTitle}`,
+          proposal_data: JSON.stringify(proposalPayload),
+        }),
       });
 
-      if (proposalError) throw proposalError;
+      if (!uploadResp.ok) {
+        const uploadError = await uploadResp.json().catch(() => null);
+        throw new Error(uploadError?.error || "Failed to upload proposal PDF");
+      }
 
-      alert("Proposal submitted successfully!");
-      router.push("/apply");
+      const uploadData = await uploadResp.json();
+      const publicUrl = uploadData?.url;
+      if (!publicUrl) throw new Error("Failed to obtain proposal download URL");
+
+      // Server upload route will persist a DB row using the service-role key.
+
+      setPdfDownloadUrl(publicUrl);
+      alert("Proposal saved to your profile. You can download it from your Profile.");
+      router.push("/profile");
     } catch (err) {
       console.error("Submission failed:", err);
       alert("Failed to submit proposal. Check the console for details.");
@@ -834,14 +980,13 @@ export default function ApplyPage() {
           {[
             { key: "rfp_upload", label: "Upload RFP" },
             { key: "choice", label: "Choose Method" },
-            { key: "chat_build", label: "Build Proposal", alt: "upload_edit" },
+            { key: "chat_build", label: "Build Proposal" },
             { key: "editor", label: "Edit & Refine" },
             { key: "preview", label: "Preview & Submit" },
           ].map((s, i) => {
             const stepOrder: Step[] = ["rfp_upload", "choice", "chat_build", "editor", "preview"];
-            const altStepOrder: Step[] = ["rfp_upload", "choice", "upload_edit", "editor", "preview"];
-            const currentIdx = Math.max(stepOrder.indexOf(step), altStepOrder.indexOf(step));
-            const isActive = step === s.key || step === (s.alt as Step);
+            const currentIdx = stepOrder.indexOf(step);
+            const isActive = step === s.key;
             const isPast = i < currentIdx;
             return (
               <div key={s.key} className="flex items-center gap-2 shrink-0">
@@ -947,7 +1092,7 @@ export default function ApplyPage() {
               <p className="text-sm text-[var(--muted)] mt-2">Choose your preferred method.</p>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+            <div className="flex flex-wrap justify-center gap-5">
               {/* Build from Scratch */}
               <button onClick={() => {
                 setChatMessages([]);
@@ -955,7 +1100,7 @@ export default function ApplyPage() {
                 setProposalReady(false);
                 setShowPdfOptions(false);
                 setStep("chat_build");
-              }} className="group bg-[#EFECE3] border-2 border-[var(--divider)] hover:border-[var(--accent)] rounded-2xl p-8 text-left transition-all hover:shadow-lg">
+              }} className="group bg-[#EFECE3] border-2 border-[var(--divider)] hover:border-[var(--accent)] rounded-2xl p-8 text-left transition-all hover:shadow-lg mx-auto max-w-2xl w-full sm:w-[46%]">
                 <div className="w-14 h-14 bg-[var(--primary-light)] group-hover:bg-[var(--accent-light)] rounded-full flex items-center justify-center mb-5 transition-colors">
                   <svg className="w-7 h-7 text-[var(--primary)]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
                 </div>
@@ -967,18 +1112,6 @@ export default function ApplyPage() {
                 </div>
               </button>
 
-              {/* Edit Existing */}
-              <button onClick={() => setStep("upload_edit")} className="group bg-[#EFECE3] border-2 border-[var(--divider)] hover:border-[var(--accent)] rounded-2xl p-8 text-left transition-all hover:shadow-lg">
-                <div className="w-14 h-14 bg-[var(--primary-light)] group-hover:bg-[var(--accent-light)] rounded-full flex items-center justify-center mb-5 transition-colors">
-                  <svg className="w-7 h-7 text-[var(--primary)]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" /></svg>
-                </div>
-                <h3 className="text-lg font-bold text-[var(--foreground)] mb-2">Edit Existing Proposal</h3>
-                <p className="text-sm text-[var(--muted)] leading-relaxed mb-4">Upload your existing proposal document. Our AI will parse it into sections, point out missing details, and help you refine each part before submitting.</p>
-                <div className="flex flex-wrap gap-2">
-                  <span className="bg-[var(--primary-light)] text-[var(--primary)] px-2.5 py-1 rounded-lg text-xs font-medium">Upload &amp; Parse</span>
-                  <span className="bg-[var(--primary-light)] text-[var(--primary)] px-2.5 py-1 rounded-lg text-xs font-medium">Section Editor</span>
-                </div>
-              </button>
             </div>
 
             <button onClick={() => setStep("rfp_upload")} className="flex items-center gap-1.5 text-sm text-[var(--muted)] hover:text-[var(--foreground)] transition-colors mx-auto">
@@ -1063,6 +1196,23 @@ export default function ApplyPage() {
                         </div>
                       </div>
                     )}
+
+                    {proposalReady && !showPdfOptions && (
+                      <div className="pt-4">
+                        <button
+                          onClick={handleGenerateFromChat}
+                          disabled={generatingProposal}
+                          className="flex items-center gap-2 bg-[var(--primary)] text-[#EFECE3] px-5 py-2.5 rounded-xl text-sm font-semibold hover:bg-[var(--primary-hover)] disabled:opacity-50 transition-all shadow-sm"
+                        >
+                          {generatingProposal ? (
+                            <><div className="w-3.5 h-3.5 border-2 border-[#EFECE3]/30 border-t-[#EFECE3] rounded-full animate-spin" />Generating...</>
+                          ) : (
+                            <><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>Generate Proposal</>
+                          )}
+                        </button>
+                      </div>
+                    )}
+
                     <div ref={chatEndRef} />
                   </div>
 
@@ -1120,57 +1270,7 @@ export default function ApplyPage() {
         )}
 
         {/* STEP 3b: UPLOAD & PARSE */}
-        {step === "upload_edit" && (
-          <div className="space-y-6">
-            <div className="card">
-              <h2 className="text-lg font-bold text-[var(--foreground)] mb-4">Upload Your Proposal</h2>
-              <label className="block cursor-pointer">
-                <input
-                  type="file"
-                  accept=".pdf,.txt,.doc,.docx"
-                  onChange={(e) => {
-                    const f = e.target.files?.[0];
-                    if (f) {
-                      setUploadFile(f);
-                      setUploadFileName(f.name);
-                      void handleParseUpload(f);
-                    }
-                  }}
-                  className="hidden"
-                />
-                <div className="bg-[#EFECE3] border-2 border-dashed border-[var(--divider)] hover:border-[var(--primary)] rounded-2xl p-12 text-center transition-colors cursor-pointer">
-                  {uploadFile ? (
-                    <>
-                      <svg className="w-6 h-6 text-[var(--primary)] mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
-                      <p className="text-sm font-semibold text-[var(--foreground)]">{uploadFileName}</p>
-                      {parsingUpload && (
-                        <div className="max-w-md mx-auto mt-4 space-y-2">
-                          <p className="text-xs text-[var(--muted)]">{uploadProgressMessage}</p>
-                          <progress className="w-full h-2 overflow-hidden rounded-full" value={uploadProgressPercent} max={100} />
-                        </div>
-                      )}
-                    </>
-                  ) : (
-                    <>
-                      <p className="text-lg font-semibold text-[var(--foreground)] mb-1">{uploadCta || "Click to upload proposal"}</p>
-                      <p className="text-sm text-[var(--muted)]">PDF, TXT, DOC, or DOCX files</p>
-                    </>
-                  )}
-                </div>
-              </label>
-              {uploadFile && !parsingUpload && (
-                <button onClick={() => void handleParseUpload()} disabled={parsingUpload} className="w-full mt-4 bg-[var(--primary)] hover:bg-[var(--primary-hover)] text-[#EFECE3] px-6 py-3 rounded-lg text-sm font-semibold disabled:opacity-50 transition-all">
-                  {parsingUpload ? <>Parsing...</> : <>Parse & Continue</>}
-                </button>
-              )}
-            </div>
-
-            <button onClick={() => setStep("choice")} className="flex items-center gap-1.5 text-sm text-[var(--muted)] hover:text-[var(--foreground)] transition-colors mx-auto">
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
-              Back
-            </button>
-          </div>
-        )}
+        {/* Upload/edit option removed: only build from scratch is available. */}
 
         {/* STEP 4: EDITOR */}
         {step === "editor" && (
@@ -1246,7 +1346,21 @@ export default function ApplyPage() {
             </div>
 
             {pdfPreviewUrl ? (
-              <iframe src={pdfPreviewUrl} title="Proposal PDF preview" className="w-full h-96 border border-[var(--divider)] rounded-lg" />
+              <div className="space-y-4">
+                <iframe src={pdfPreviewUrl} title="Proposal PDF preview" className="w-full h-96 border border-[var(--divider)] rounded-lg" />
+                {pdfDownloadUrl ? (
+                  <div className="flex justify-end">
+                    <a
+                      href={pdfDownloadUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-2 bg-[var(--surface)] border border-[var(--divider)] text-[var(--foreground)] px-4 py-2 rounded-lg text-sm hover:bg-[var(--surface-hover)]"
+                    >
+                      Open full PDF
+                    </a>
+                  </div>
+                ) : null}
+              </div>
             ) : (
               <div className="card text-center py-12 space-y-4">
                 <p className="text-[var(--muted)]">Generating PDF preview...</p>

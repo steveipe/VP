@@ -11,7 +11,63 @@ def _section_list(value: Any) -> list[str]:
     return []
 
 
-def _render_analysis_html(vendor_response: Dict[str, Any], timestamp: str) -> str:
+def _resolve_template_theme(template: str | None, options: dict[str, Any] | None = None) -> dict[str, str]:
+    themes = {
+        "executive": {
+            "accent": "#3b82f6",
+            "card": "#eff6ff",
+            "muted": "#f3f4f6",
+            "border": "#dbe3ef",
+        },
+        "modern": {
+            "accent": "#14b8a6",
+            "card": "#d9f7ef",
+            "muted": "#f0fdf4",
+            "border": "#c7f0e3",
+        },
+        "classic": {
+            "accent": "#a16207",
+            "card": "#fef3c7",
+            "muted": "#f8f0e3",
+            "border": "#f3e0b5",
+        },
+        "minimal": {
+            "accent": "#111827",
+            "card": "#f3f4f6",
+            "muted": "#f8fafc",
+            "border": "#e5e7eb",
+        },
+    }
+
+    if isinstance(options, dict):
+        theme_option = options.get("theme")
+        if isinstance(theme_option, dict):
+            return {
+                "accent": theme_option.get("accent")
+                or theme_option.get("primaryDark")
+                or theme_option.get("primary")
+                or "#3b82f6",
+                "card": theme_option.get("card")
+                or theme_option.get("secondary")
+                or theme_option.get("background")
+                or "#eff6ff",
+                "muted": theme_option.get("muted")
+                or theme_option.get("surface")
+                or "#f3f4f6",
+                "border": theme_option.get("border")
+                or theme_option.get("outline")
+                or "#dbe3ef",
+            }
+
+    return themes.get(template, themes["executive"])
+
+
+def _render_analysis_html(vendor_response: Dict[str, Any], timestamp: str, theme: dict[str, str]) -> str:
+    accent = theme.get("accent", "#3b82f6")
+    card = theme.get("card", "#eff6ff")
+    muted = theme.get("muted", "#f3f4f6")
+    border = theme.get("border", "#dbe3ef")
+
     executive_summary = escape(str(vendor_response.get("executive_summary", "")))
     requirement_mapping = vendor_response.get("requirement_mapping", [])
     pricing_breakdown = vendor_response.get("pricing_breakdown", [])
@@ -63,21 +119,23 @@ def _render_analysis_html(vendor_response: Dict[str, Any], timestamp: str) -> st
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>Vendor Proposal</title>
         <style>
+            @page {{ size: A4; margin: 18mm; }}
             * {{ margin: 0; padding: 0; box-sizing: border-box; }}
             body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; color: #1f2937; line-height: 1.6; background: #fff; padding: 40px; }}
             @media print {{ body {{ padding: 20px; }} }}
-            .header {{ border-bottom: 3px solid #3b82f6; padding-bottom: 16px; margin-bottom: 32px; }}
+            .header {{ border-bottom: 3px solid {accent}; padding-bottom: 16px; margin-bottom: 32px; }}
             h1 {{ font-size: 28px; font-weight: bold; color: #1f2937; margin-bottom: 8px; }}
             .timestamp {{ font-size: 12px; color: #6b7280; }}
-            h2 {{ font-size: 18px; font-weight: 600; color: #1f2937; margin-top: 28px; margin-bottom: 12px; border-left: 4px solid #3b82f6; padding-left: 12px; }}
+            h2 {{ font-size: 18px; font-weight: 600; color: #1f2937; margin-top: 28px; margin-bottom: 12px; border-left: 4px solid {accent}; padding-left: 12px; }}
             p {{ margin-bottom: 12px; font-size: 14px; }}
             table {{ width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 13px; }}
-            th, td {{ padding: 12px; text-align: left; border-bottom: 1px solid #e5e7eb; }}
-            th {{ background-color: #f3f4f6; font-weight: 600; color: #1f2937; }}
+            th, td {{ padding: 12px; text-align: left; border-bottom: 1px solid {border}; }}
+            th {{ background-color: {muted}; font-weight: 600; color: #1f2937; }}
             tr:nth-child(even) {{ background-color: #f9fafb; }}
             ul, ol {{ margin-left: 24px; margin-bottom: 12px; font-size: 14px; }}
             li {{ margin-bottom: 6px; }}
             .section {{ page-break-inside: avoid; margin-bottom: 24px; }}
+            .meta-card {{ border: 1px solid {border}; border-radius: 12px; padding: 14px; background: {card}; margin-bottom: 16px; }}
         </style>
     </head>
     <body>
@@ -103,7 +161,12 @@ def _render_analysis_html(vendor_response: Dict[str, Any], timestamp: str) -> st
     """
 
 
-def _render_proposal_html(vendor_response: Dict[str, Any], timestamp: str) -> str:
+def _render_proposal_html(vendor_response: Dict[str, Any], timestamp: str, theme: dict[str, str]) -> str:
+    accent = theme.get("accent", "#3b82f6")
+    card = theme.get("card", "#eff6ff")
+    muted = theme.get("muted", "#f3f4f6")
+    border = theme.get("border", "#dbe3ef")
+
     proposal_sections = vendor_response.get("sections") if isinstance(vendor_response.get("sections"), dict) else None
     proposal_title = str(vendor_response.get("title") or vendor_response.get("proposal_title") or "Vendor Proposal")
     vendor_name = str(vendor_response.get("vendorName") or vendor_response.get("vendor_name") or "Vendor")
@@ -156,24 +219,25 @@ def _render_proposal_html(vendor_response: Dict[str, Any], timestamp: str) -> st
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>{escape(proposal_title)}</title>
         <style>
+            @page {{ size: A4; margin: 18mm; }}
             * {{ margin: 0; padding: 0; box-sizing: border-box; }}
             body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; color: #1f2937; line-height: 1.6; background: #fff; padding: 40px; }}
             @media print {{ body {{ padding: 20px; }} }}
-            .header {{ border-bottom: 3px solid #3b82f6; padding-bottom: 16px; margin-bottom: 32px; }}
+            .header {{ border-bottom: 3px solid {accent}; padding-bottom: 16px; margin-bottom: 32px; }}
             h1 {{ font-size: 28px; font-weight: bold; color: #1f2937; margin-bottom: 8px; }}
             .timestamp {{ font-size: 12px; color: #6b7280; }}
-            h2 {{ font-size: 18px; font-weight: 600; color: #1f2937; margin-top: 28px; margin-bottom: 12px; border-left: 4px solid #3b82f6; padding-left: 12px; }}
+            h2 {{ font-size: 18px; font-weight: 600; color: #1f2937; margin-top: 28px; margin-bottom: 12px; border-left: 4px solid {accent}; padding-left: 12px; }}
             p {{ margin-bottom: 12px; font-size: 14px; }}
             ul, ol {{ margin-left: 24px; margin-bottom: 12px; font-size: 14px; }}
             li {{ margin-bottom: 6px; }}
             .proposal-cover {{ page-break-after: always; min-height: 90vh; }}
             .proposal-meta-grid {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin: 24px 0; }}
-            .meta-card {{ border: 1px solid #dbe3ef; border-radius: 16px; padding: 16px; background: #f8fafc; }}
-            .proposal-section {{ page-break-after: always; min-height: 235mm; border: 1px solid #dbe3ef; border-radius: 20px; padding: 24px; margin-bottom: 0; }}
+            .meta-card {{ border: 1px solid {border}; border-radius: 16px; padding: 16px; background: {card}; }}
+            .proposal-section {{ page-break-after: always; min-height: 235mm; border: 1px solid {border}; border-radius: 20px; padding: 24px; margin-bottom: 0; }}
             .section-heading {{ display: flex; gap: 16px; align-items: flex-start; margin-bottom: 18px; }}
-            .section-index {{ width: 44px; height: 44px; border-radius: 999px; background: #3b82f6; color: #fff; font-weight: 700; display: flex; align-items: center; justify-content: center; flex: 0 0 auto; }}
+            .section-index {{ width: 44px; height: 44px; border-radius: 999px; background: {accent}; color: #fff; font-weight: 700; display: flex; align-items: center; justify-content: center; flex: 0 0 auto; }}
             .section-body {{ white-space: pre-wrap; font-size: 14px; }}
-            .section-note {{ margin-top: 18px; padding: 14px 16px; background: #eff6ff; border-left: 4px solid #3b82f6; border-radius: 10px; font-size: 13px; }}
+            .section-note {{ margin-top: 18px; padding: 14px 16px; background: {card}; border-left: 4px solid {accent}; border-radius: 10px; font-size: 13px; }}
         </style>
     </head>
     <body>
@@ -199,12 +263,19 @@ def _render_proposal_html(vendor_response: Dict[str, Any], timestamp: str) -> st
     """
 
 
-def render_vendor_response_to_html(vendor_response: Dict[str, Any]) -> str:
+def render_vendor_response_to_html(vendor_response: Dict[str, Any], options: Dict[str, Any] | None = None) -> str:
     """Render a vendor response or proposal payload to HTML for PDFShift."""
 
+    template_name = None
+    if isinstance(options, dict):
+        template_name = options.get("template")
+    if not template_name and isinstance(vendor_response.get("options"), dict):
+        template_name = vendor_response["options"].get("template")
+
+    theme = _resolve_template_theme(str(template_name).lower() if template_name else None, options)
     timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
 
     if isinstance(vendor_response.get("sections"), dict):
-        return _render_proposal_html(vendor_response, timestamp)
+        return _render_proposal_html(vendor_response, timestamp, theme)
 
-    return _render_analysis_html(vendor_response, timestamp)
+    return _render_analysis_html(vendor_response, timestamp, theme)

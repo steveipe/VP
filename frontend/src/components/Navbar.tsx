@@ -9,41 +9,13 @@ import { supabase } from "@/services/supabase";
 export default function Navbar() {
   const { user, profile, signOut } = useAuth();
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [unreadNotifications, setUnreadNotifications] = useState(0);
   const pathname = usePathname();
 
   const navItems = [
-    { label: "Companies", href: "/companies" },
-    { label: "Contracts", href: "/contracts" },
-    { label: "Post RFP", href: "/postrfp" },
-    { label: "Messages", href: "/messages" },
-    { label: "Notifications", href: "/notifications", badge: unreadNotifications },
+    { label: "Home", href: "/" },
+    { label: "Build", href: "/apply" },
+    { label: "My Proposals", href: "/profile" },
   ];
-
-  useEffect(() => {
-    if (!user) {
-      setUnreadNotifications(0);
-      return;
-    }
-
-    const fetchNotifications = async () => {
-      try {
-        const { data, error } = await supabase
-          .from("notifications")
-          .select("*")
-          .eq("user_id", user.id)
-          .eq("read", false);
-        
-        if (!error && data) {
-          setUnreadNotifications(data.length);
-        }
-      } catch (err) {
-        console.error("Failed to fetch notifications", err);
-      }
-    };
-
-    void fetchNotifications();
-  }, [user]);
 
   return (
     <nav className="sticky top-0 z-50 w-full">
@@ -147,15 +119,26 @@ export default function Navbar() {
                   </button>
                 </div>
               ) : (
-                <Link
-                  href="/login"
-                  className="text-[13px] font-semibold px-4 py-1.5 rounded-lg transition-all"
-                  style={{ background: "var(--primary)", color: "#EFECE3" }}
-                  onMouseEnter={(e) => { e.currentTarget.style.background = "var(--primary-hover)"; }}
-                  onMouseLeave={(e) => { e.currentTarget.style.background = "var(--primary)"; }}
-                >
-                  Sign in
-                </Link>
+                <div className="flex items-center gap-2">
+                  <Link
+                    href="/signup"
+                    className="text-[13px] font-semibold px-4 py-1.5 rounded-lg transition-all"
+                    style={{ background: "var(--primary-light)", color: "var(--primary)" }}
+                    onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(74, 112, 169, 0.12)"; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.background = "var(--primary-light)"; }}
+                  >
+                    Sign up
+                  </Link>
+                  <Link
+                    href="/login"
+                    className="text-[13px] font-semibold px-4 py-1.5 rounded-lg transition-all"
+                    style={{ background: "var(--primary)", color: "#EFECE3" }}
+                    onMouseEnter={(e) => { e.currentTarget.style.background = "var(--primary-hover)"; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.background = "var(--primary)"; }}
+                  >
+                    Sign in
+                  </Link>
+                </div>
               )}
             </div>
 
@@ -219,14 +202,24 @@ export default function Navbar() {
                 </button>
               </div>
             ) : (
-              <Link
-                href="/login"
-                className="block text-center text-sm font-semibold py-2.5 rounded-lg"
-                style={{ background: "var(--primary)", color: "#EFECE3" }}
-                onClick={() => setMobileOpen(false)}
-              >
-                Sign in
-              </Link>
+              <div className="space-y-2">
+                <Link
+                  href="/signup"
+                  className="block text-center text-sm font-semibold py-2.5 rounded-lg"
+                  style={{ background: "var(--primary-light)", color: "var(--primary)" }}
+                  onClick={() => setMobileOpen(false)}
+                >
+                  Sign up
+                </Link>
+                <Link
+                  href="/login"
+                  className="block text-center text-sm font-semibold py-2.5 rounded-lg"
+                  style={{ background: "var(--primary)", color: "#EFECE3" }}
+                  onClick={() => setMobileOpen(false)}
+                >
+                  Sign in
+                </Link>
+              </div>
             )}
           </div>
         </div>

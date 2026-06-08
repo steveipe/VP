@@ -10,7 +10,14 @@ export interface LocalJob<T = unknown> {
   updated_at: string;
 }
 
-const jobStore = new Map<string, LocalJob<any>>();
+const jobStore = (() => {
+  const globalSym = Symbol.for("vp4.localJobStore");
+  const globalAny = globalThis as any;
+  if (!globalAny[globalSym]) {
+    globalAny[globalSym] = new Map<string, LocalJob<any>>();
+  }
+  return globalAny[globalSym] as Map<string, LocalJob<any>>;
+})();
 
 export function createLocalJob<T>(initial?: Partial<LocalJob<T>>): LocalJob<T> {
   const now = new Date().toISOString();
@@ -113,6 +120,160 @@ export function sectionTemplate(sectionName: string, source: string, vendorName:
   return templates[sectionName] || excerpt || `Content for ${sectionName} should be completed by the vendor.`;
 }
 
+function extractSectionItems(text: string): string[] {
+  const normalized = sanitizeText(text);
+  const itemMatches = Array.from(normalized.matchAll(/\(\d+\)\s*([^;\n]+)/g)).map((m) => m[1].trim()).filter(Boolean);
+  if (itemMatches.length) return itemMatches;
+
+  const lines = normalized
+    .split(/\r?\n/)
+    .map((line) => line.trim().replace(/^[\-\*\d\.\)]+\s*/, ""))
+    .filter((line) => line.length > 10);
+
+  return lines.slice(0, 5);
+}
+
+export function buildSectionAdditionalSentences(
+  current: string,
+  sectionLabel: string,
+  contractTitle?: string,
+  vendorName?: string
+): string {
+  const clean = sanitizeText(current);
+  const items = extractSectionItems(clean);
+  const title = sectionLabel || "this section";
+  const sectionPhrase = /section$/i.test(title) ? title : `${title} section`;
+  const projectRef = contractTitle ? ` for ${contractTitle}` : "";
+  const vendorRef = vendorName ? ` ${vendorName}` : "";
+
+  const sectionContext: Record<string, string> = {
+    "company profile": `It positions${vendorRef} as a qualified partner for${projectRef}, highlighting certified quality management, compliance, and a track record of delivering scalable solutions to government and private sector clients.`,
+    "project understanding": `It demonstrates a clear grasp of the project requirements, success criteria, and delivery expectations for${projectRef}.`,
+    "proposed solution": `It presents a practical, phased solution designed to meet the business objectives and reduce implementation risk for${projectRef}.`,
+    "deliverables": `It clarifies the proposed deliverables, milestone outputs, and documentation required to successfully complete${projectRef}.`,
+    "project timeline": `It frames the timeline around discovery, development, testing, and deployment milestones so reviewers can track progress for${projectRef}.`,
+    "cost proposal": `It positions the pricing as a value-based proposal with clear assumptions, payment milestones, and cost controls for${projectRef}.`,
+    "team details": `It identifies the delivery team, their roles, and the governance approach that will support successful execution of${projectRef}.`,
+    "past experience": `It highlights relevant past engagements, measurable outcomes, and proof points that increase confidence in delivering${projectRef}.`,
+    "risk management": `It outlines risk mitigation, quality controls, and contingency measures to keep${projectRef} on track and within scope.`,
+    "support & maintenance": `It describes ongoing support, response expectations, and service management to sustain${projectRef} after launch.`,
+    "graphs / visualizations": `It signals the use of charts or visual summaries to communicate cost, timeline, and performance expectations for${projectRef}.`,
+    "terms & conditions": `It covers acceptance criteria, confidentiality, change control, and commercial terms relevant to${projectRef}.`,
+    "document uploads": `It lists supporting materials and attachments that will accompany the proposal package for${projectRef}.`,
+    "final declaration": `It confirms the proposal is accurate, complete, and submitted in good faith with a commitment to deliver${projectRef}.`,
+  };
+
+  const sectionSpecific = sectionContext[title.toLowerCase()] || `It strengthens the ${sectionPhrase} with project-specific clarity and reviewer-friendly structure for${projectRef}.`;
+
+  const baseSentence = clean
+    ? clean.endsWith(".") || clean.endsWith("!") || clean.endsWith("?")
+      ? clean
+      : `${clean}.`
+    : `This ${sectionPhrase} is prepared for${projectRef}.`;
+
+  const detailSentences: Record<string, string[]> = {
+    "company profile": [
+      `It emphasizes the vendor's core capabilities, relevant experience, and points of differentiation for reviewer confidence.${vendorRef ? ` ${vendorRef}` : ""}`,
+      `It showcases the business strengths, team depth, and service focus that make this proposal compelling for${projectRef}.`,
+      `This helps stakeholders understand why the vendor is the most appropriate partner for the engagement.`,
+    ],
+    "project understanding": [
+      `It explains the key objectives, scope boundaries, and success criteria that are critical to the project.`,
+      `It also highlights how the vendor has interpreted the RFP requirements and the business value expected from this work.`,
+      `This level of clarity reduces ambiguity and helps align the response to expected outcomes.`,
+    ],
+    "proposed solution": [
+      `It describes the recommended technical and delivery approach, with a focus on practical execution and risk reduction.`,
+      `It also outlines the expected benefits, efficiency gains, and value drivers for the project.`,
+      `This makes the solution easier to evaluate and compare against stakeholder priorities.`,
+    ],
+    "deliverables": [
+      `It lists the deliverables, milestones, and tangible outputs that will be produced as part of the engagement.`,
+      `It also clarifies the documentation, review gates, and acceptance criteria associated with each deliverable.`,
+      `This ensures reviewers can see exactly what will be delivered and when.`,
+    ],
+    "project timeline": [
+      `It structures the timeline around key milestones, phases, and decision points for the project.`,
+      `It also calls out review cycles, approval checkpoints, and expected delivery windows.`,
+      `This helps stakeholders understand the pace and sequencing of work for the project.`,
+    ],
+    "cost proposal": [
+      `It explains the cost basis, pricing assumptions, and commercial terms behind the proposal.`,
+      `It also clarifies any payment milestones, contingency allowances, and value-driven rationale.`,
+      `This makes the pricing more transparent and easier to justify.`,
+    ],
+    "team details": [
+      `It identifies the core delivery team, their roles, and how they will collaborate to execute the project.`,
+      `It also describes governance, escalation, and quality assurance arrangements.`,
+      `This helps reviewers understand the people and structure behind the proposal.`,
+    ],
+    "past experience": [
+      `It highlights relevant past projects, client outcomes, and measurable results that support the proposal.`,
+      `It also connects experience to the project scope and explains why this track record matters.`,
+      `This provides credibility and confidence in the vendor's ability to deliver.`,
+    ],
+    "risk management": [
+      `It outlines the main risks, mitigation strategies, and contingency plans for the project.`,
+      `It also describes monitoring, governance, and quality controls that will keep the work on track.`,
+      `This reassures reviewers that risks are understood and actively managed.`,
+    ],
+    "support & maintenance": [
+      `It describes the post-delivery support model, service levels, and response commitments.`,
+      `It also clarifies ongoing maintenance, escalation paths, and continuity planning.`,
+      `This makes the long-term support approach easier to evaluate and trust.`,
+    ],
+    "graphs / visualizations": [
+      `It explains the types of charts, comparisons, or visual summaries that would make this section valuable.`,
+      `It also highlights how visual data supports the budget, timeline, and team narrative.`,
+      `This helps reviewers quickly grasp the most important information through visual aids.`,
+    ],
+    "terms & conditions": [
+      `It covers the essential contractual terms, confidentiality obligations, and change control processes.`,
+      `It also clarifies acceptance criteria, liability expectations, and any key commercial terms.`,
+      `This provides a more complete picture of the proposal's legal and commercial framework.`,
+    ],
+    "document uploads": [
+      `It lists supporting materials, attachments, and evidence that accompany the proposal.`,
+      `It also clarifies which documents are provided for compliance, validation, and technical detail.`,
+      `This makes the supporting package easier to review and trust.`,
+    ],
+    "final declaration": [
+      `It makes a clear statement of accuracy, intent, and the vendor's commitment to the proposal.`,
+      `It also reinforces the validity period, review readiness, and confidence behind the submission.`,
+      `This helps close the proposal with a professional and trustworthy tone.`,
+    ],
+    "default": [
+      `It also clarifies how this section supports the broader proposal and what reviewers should take away from it.`,
+      `It is written to be clear, professional, and aligned with the user's key project objectives.`,
+      `This ensures the proposal remains focused, persuasive, and easy to evaluate.`,
+    ],
+  };
+
+  const details = detailSentences[title.toLowerCase()] || detailSentences.default;
+  const sentences: string[] = [baseSentence];
+
+  if (items.length > 0) {
+    const excerpts = items
+      .map((item) => item.replace(/\s*\b(accepted when|accepted upon|accepted by)\b.*$/i, "").trim())
+      .filter(Boolean);
+    const summaryItems = excerpts.slice(0, 4);
+    const listPhrase = summaryItems.length === 1
+      ? summaryItems[0]
+      : summaryItems.length === 2
+        ? `${summaryItems[0]} and ${summaryItems[1]}`
+        : `${summaryItems.slice(0, -1).join(", ")}, and ${summaryItems.slice(-1)}`;
+    sentences.push(`It includes ${listPhrase}${items.length > 4 ? ", among other key commitments" : ""}.`);
+    sentences.push(sectionSpecific);
+  } else {
+    sentences.push(sectionSpecific);
+  }
+
+  sentences.push(...details.slice(0, 3));
+  sentences.push(`Overall, this ${sectionPhrase} provides a strong, professional response that reflects the user's input and makes the proposal easier to evaluate.`);
+
+  return sentences.join(" ").trim();
+}
+
 export const PROPOSAL_SECTION_KEYS = [
   "vendor_information",
   "company_profile",
@@ -190,7 +351,7 @@ export function buildRfpAnalysis(text: string): RFPAnalysisLike {
 
 export function buildChatQuestion(sectionIndex: number): string {
   const questions = [
-    "What is your company name, primary contact, email, phone, address, and years of experience?",
+    "Please provide your vendor information, including company name, contact details, and proposal ownership.",
     "Briefly describe your company profile and the services you provide.",
     "What is your understanding of the project requirements and success criteria?",
     "What solution do you recommend, and why is it the right fit?",
@@ -204,6 +365,7 @@ export function buildChatQuestion(sectionIndex: number): string {
     "Are there any charts, visuals, or diagrams that should be included?",
     "Are there any terms, conditions, or assumptions we should note?",
     "Which supporting documents or attachments should be included?",
+    "Please confirm the proposal is complete and ready for submission.",
   ];
 
   return questions[Math.min(sectionIndex, questions.length - 1)];

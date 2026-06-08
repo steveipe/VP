@@ -1,3 +1,4 @@
+import { buildSectionAdditionalSentences } from "@/lib/appApi";
 import type { ProposalSectionsLike } from "@/lib/appApi";
 
 export function buildChartDataFromSections(sections: Record<string, string>) {
@@ -34,7 +35,9 @@ export function refineSections(sections: Record<string, string>, critique: unkno
   for (const key of Object.keys(out) as (keyof ProposalSectionsLike)[]) {
     const value = String(out[key] || "").trim();
     if (!value) continue;
-    out[key] = `${value}\n\nRefined: add concrete examples, specific deliverables, and measurable outcomes aligned to the RFP.`;
+    const sectionLabel = String(key).replace(/_/g, " ");
+    const addition = buildSectionAdditionalSentences(value, sectionLabel);
+    out[key] = `${value}\n\n${addition}`;
   }
   return out;
 }

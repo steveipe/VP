@@ -2,7 +2,7 @@
 
 import { createContext, useContext, useEffect, useState, ReactNode } from "react";
 import { User } from "@supabase/supabase-js";
-import { supabase } from "@/services/supabase";
+import { supabase, updateUserProfile } from "@/services/supabase";
 
 export interface UserProfile {
   id: string;
@@ -30,6 +30,7 @@ interface AuthContextType {
   profile: UserProfile | null;
   loading: boolean;
   signOut: () => Promise<void>;
+  updateProfile: (profile: Partial<UserProfile>) => Promise<UserProfile | null>;
 }
 
 const AuthContext = createContext<AuthContextType>({
@@ -97,8 +98,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setProfile(null);
   };
 
+  const handleUpdateProfile = async (profilePatch: Partial<UserProfile>): Promise<UserProfile | null> => {
+    if (!user) return null;
+    const updatedProfile = await updateUserProfile(user.id, profilePatch);
+    if (updatedProfile) {
+      setProfile((current) => (current ? { ...current, ...updatedProfile } : updatedProfile));
+    }
+    return updatedProfile;
+  };
+
   return (
-    <AuthContext.Provider value={{ user, profile, loading, signOut: handleSignOut }}>
+    <AuthContext.Provider value={{ user, profile, loading, signOut: handleSignOut, updateProfile: handleUpdateProfile }}>
       {children}
     </AuthContext.Provider>
   );

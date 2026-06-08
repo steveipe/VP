@@ -1,6 +1,7 @@
 import requests
 import time
 import os
+from pathlib import Path
 from typing import Optional, Dict, Any
 
 from .settings import settings
@@ -8,8 +9,26 @@ from .settings import settings
 PDFSHIFT_BASE_URL = "https://api.pdfshift.io/v3/convert/pdf"
 
 
+def _load_pdfshift_key_from_backend_env() -> str | None:
+    env_file = Path(__file__).resolve().parent.parent / ".env.local"
+    if not env_file.exists():
+        return None
+
+    try:
+        for line in env_file.read_text(encoding="utf-8").splitlines():
+            if not line or line.strip().startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            if key.strip() == "PDFSHIFT_API_KEY":
+                return value.strip().strip('"').strip("'")
+    except Exception:
+        pass
+
+    return None
+
+
 def _pdfshift_api_key() -> str | None:
-    return settings.pdfshift_api_key or os.getenv("PDFSHIFT_API_KEY")
+    return _load_pdfshift_key_from_backend_env() or settings.pdfshift_api_key or os.getenv("PDFSHIFT_API_KEY")
 
 
 def _pdfshift_timeout_ms() -> int:
@@ -49,8 +68,9 @@ def convert_html_to_pdf(html_string: str, options: Optional[Dict[str, Any]] = No
     }
     
     headers = {
-        "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
+        "X-API-Key": api_key,
+        "X-Processor-Version": "142",
     }
     
     timeout_sec = _pdfshift_timeout_ms() / 1000.0

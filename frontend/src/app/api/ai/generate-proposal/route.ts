@@ -3,6 +3,7 @@ import {
   PROPOSAL_SECTION_KEYS,
   buildPriceFromText,
   buildProposalSections,
+  buildSectionAdditionalSentences,
   buildTimelineFromText,
   sanitizeText,
   sectionTemplate,
@@ -19,23 +20,42 @@ function emptySections(): ProposalSectionsLike {
 }
 
 function detailedExpansion(sectionKey: ProposalSectionKey, current: string, rfpContext: string, vendorName: string, contractTitle: string) {
+  const cleanCurrent = sanitizeText(current);
+  if (!cleanCurrent) return cleanCurrent;
   const label = sectionKey.replace(/_/g, " ");
-  const lead = splitParagraphs(current)[0] || sectionTemplate(sectionKey, rfpContext, vendorName, contractTitle);
-  const contextLead = splitParagraphs(rfpContext)[0] || rfpContext.slice(0, 220) || "the uploaded requirements";
+  const expanded = buildSectionAdditionalSentences(cleanCurrent, label, contractTitle, vendorName);
+  // Avoid repeating the same opening sentence twice. If the expansion
+  // begins with the same first sentence as the original content,
+  // strip the duplicated leading sentence from the expansion before
+  // concatenating.
+  const firstSentenceMatch = cleanCurrent.match(/^(.*?[\.\!\?])(\s|$)/);
+  const firstSentence = firstSentenceMatch ? firstSentenceMatch[1].trim() : "";
+  let expansionBody = expanded;
+  if (firstSentence && expansionBody.startsWith(firstSentence)) {
+    expansionBody = expansionBody.slice(firstSentence.length).trim();
+    // If expansionBody still begins with punctuation or extra separators, remove them
+    expansionBody = expansionBody.replace(/^[:\-–—\s\n]+/, "");
+  }
 
-  return `${lead}
+  // If the expansion accidentally repeated the original content or its
+  // first sentence elsewhere, remove that duplicate text to avoid showing
+  // the same information twice in the editor.
+  if (cleanCurrent && expansionBody.includes(cleanCurrent)) {
+    expansionBody = expansionBody.replace(cleanCurrent, "").trim();
+  } else if (firstSentence && expansionBody.includes(firstSentence)) {
+    expansionBody = expansionBody.replace(firstSentence, "").trim();
+  }
 
-Expanded narrative:
-The uploaded proposal already positions this section around ${contextLead}. Keep the wording faithful to the source document while fleshing out the operational detail that a reviewer expects in a submission-ready proposal for ${contractTitle || "the project"}.
+  // If expansionBody is insubstantial after removals (e.g. "It includes ."),
+  // don't append it.
+  // Remove leftover empty connectors like "It includes ." if they remain
+  expansionBody = expansionBody.replace(/\bIt includes\b\s*[\.:;\-–—]*\s*/i, "").trim();
 
-Implementation detail:
-- Restate the concrete commitments already present in the uploaded proposal.
-- Add a fuller explanation of how ${label} supports the overall delivery plan.
-- Call out assumptions, dependencies, and review points that are implied by the source.
-- Close with a clear handoff to the next section so the document reads as a complete proposal.
+  if ((expansionBody.replace(/[^A-Za-z0-9]/g, "")).length < 5) {
+    expansionBody = "";
+  }
 
-Review note:
-Use precise language, avoid inventing facts, and preserve the evidence, timeline, commercial terms, and deliverable structure from the uploaded document.`;
+  return `${cleanCurrent}${expansionBody ? `\n\n${expansionBody}` : ""}`;
 }
 
 function fullProposal(chatHistory: unknown, rfpContext: string, vendorName: string, contractTitle: string) {
@@ -58,6 +78,72 @@ function fullProposal(chatHistory: unknown, rfpContext: string, vendorName: stri
   sections.terms_conditions = sectionTemplate("terms_conditions", lead, vendorName, contractTitle);
   sections.document_uploads = sectionTemplate("document_uploads", lead, vendorName, contractTitle);
   sections.final_declaration = sectionTemplate("final_declaration", lead, vendorName, contractTitle);
+
+  // If chatHistory contains user-provided content from the Build-from-Scratch flow,
+  // map the final response from each question block to the canonical proposal
+  // section keys. This avoids stale or corrected answers being written into
+  // later Sections when the user retries or a prompt is repeated.
+  try {
+    if (Array.isArray(chatHistory) && chatHistory.length > 0) {
+      const normalizedMessages = (chatHistory as any[])
+        .filter((m) => m && typeof m.role === "string" && String(m.content || "").trim())
+        .map((m) => ({ role: String(m.role).toLowerCase(), content: String(m.content).trim() }));
+
+      const finalUserResponses: string[] = [];
+      for (let i = 0; i < normalizedMessages.length - 1; i++) {
+        const current = normalizedMessages[i];
+        const next = normalizedMessages[i + 1];
+        if (current.role === "user" && next.role === "assistant") {
+          const assistantText = next.content.trim();
+          if (assistantText.startsWith("Received.") || assistantText.startsWith("Got it.")) {
+            finalUserResponses.push(current.content);
+          }
+        }
+      }
+
+      // If no acknowledged responses were found, fall back to the final user replies.
+      if (finalUserResponses.length === 0) {
+        let lastUserResponse = "";
+        for (const msg of normalizedMessages) {
+          if (msg.role === "user") {
+            lastUserResponse = msg.content;
+          }
+        }
+        if (lastUserResponse) {
+          finalUserResponses.push(lastUserResponse);
+        }
+      }
+
+      // Assign in-order but skip `vendor_information` so user inputs map to
+      // the more content-focused sections (company_profile onward).
+      const vendorIndex = PROPOSAL_SECTION_KEYS.indexOf("vendor_information");
+      const startIndex = vendorIndex >= 0 ? vendorIndex + 1 : 0;
+      for (let i = 0; i < finalUserResponses.length; i++) {
+        const targetIdx = startIndex + i;
+        if (targetIdx >= PROPOSAL_SECTION_KEYS.length) break;
+        const key = PROPOSAL_SECTION_KEYS[targetIdx];
+        if (finalUserResponses[i]) sections[key] = finalUserResponses[i];
+      }
+
+      // Expand each user-provided section so the Edit & Refine view shows
+      // an enriched, proposal-ready version rather than the raw user input.
+      try {
+        for (let i = 0; i < finalUserResponses.length; i++) {
+          const targetIdx = startIndex + i;
+          if (targetIdx >= PROPOSAL_SECTION_KEYS.length) break;
+          const key = PROPOSAL_SECTION_KEYS[targetIdx] as ProposalSectionKey;
+          const current = String(sections[key] || "").trim();
+          if (!current) continue;
+          sections[key] = detailedExpansion(key, current, rfpContext, vendorName, contractTitle);
+        }
+      } catch (err) {
+        console.warn("[generate-proposal] failed to expand mapped user sections:", err);
+      }
+    }
+  } catch (err) {
+    // Non-fatal: fallback to template-generated sections
+    console.warn("[generate-proposal] failed to map chat history to sections:", err);
+  }
 
   return {
     sections,
@@ -92,9 +178,11 @@ export async function POST(req: NextRequest) {
 
     if (mode === "edit_section") {
       const current = existingProposal.trim();
+      const instructionText = String(editInstructions || "").trim().replace(/\s+$/, "");
+      const instructionSentence = instructionText ? `${instructionText.replace(/[\.\!\?]$/, "")}.` : "Please refine this section with clearer, more detailed language.";
       const edited = current
-        ? `${current}\n\nUpdated to reflect: ${editInstructions || "the requested edit."}`
-        : `${sectionToEdit} for ${contractTitle}: ${editInstructions || "Refine this section with clear, concise details."}`;
+        ? `${current}\n\n${instructionSentence}`
+        : `${sectionToEdit} for ${contractTitle}: ${instructionSentence}`;
       return NextResponse.json({ edited_section: edited.trim() });
     }
 

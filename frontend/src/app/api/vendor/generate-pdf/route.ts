@@ -21,6 +21,7 @@ function buildPdfBase64(input: {
   totalPrice?: string;
   timeline?: string;
   sections: ProposalSectionsLike;
+  sectionLabels?: Record<string, string>;
 }) {
   const doc = new jsPDF({ unit: "pt", format: "a4" });
   const pageWidth = doc.internal.pageSize.getWidth();
@@ -38,8 +39,9 @@ function buildPdfBase64(input: {
   if (input.totalPrice) y = wrapText(doc, `Price: ${input.totalPrice}`, margin, y, pageWidth - margin * 2, 14) + 2;
   if (input.timeline) y = wrapText(doc, `Timeline: ${input.timeline}`, margin, y, pageWidth - margin * 2, 14) + 12;
 
-  for (const key of PROPOSAL_SECTION_KEYS) {
-    const label = key.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
+  const sectionKeys = input.sectionLabels ? Object.keys(input.sectionLabels) : PROPOSAL_SECTION_KEYS;
+  for (const key of sectionKeys) {
+    const label = input.sectionLabels?.[key] || key.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
     const content = sanitizeText(input.sections[key] || "");
 
     if (y > 720) {
@@ -77,7 +79,7 @@ export async function POST(req: NextRequest) {
       result: { pdf_base64 },
     });
 
-    return NextResponse.json({ job_id: job.id });
+    return NextResponse.json({ job_id: job.id, pdf_base64 });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return NextResponse.json({ error: message }, { status: 500 });

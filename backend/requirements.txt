@@ -5,3 +5,4 @@ pydantic-settings>=2.6
 python-multipart>=0.0.9
 requests>=2.31.0
 pypdf>=3.13.0
+supabase>=1.0

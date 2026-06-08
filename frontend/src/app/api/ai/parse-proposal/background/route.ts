@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createLocalJob, updateLocalJob, sanitizeText, buildProposalSections } from "@/lib/appApi";
 import { parseUploadedProposalWithAi } from "@/lib/proposalUploadParser";
+import { extractPdfTextWithOcrFallback } from "@/lib/pdfExtraction";
 
 export const runtime = "nodejs";
 
@@ -17,6 +18,20 @@ async function readUploadText(body: Record<string, unknown>): Promise<string> {
   if (typeof body.file_base64 === "string" && body.file_base64.trim()) {
     const base64 = body.file_base64.replace(/^data:.*;base64,/, "");
     const buffer = Buffer.from(base64, "base64");
+    const contentType = typeof body.content_type === "string" ? body.content_type.toLowerCase() : "";
+    const fileName = typeof body.file_name === "string" ? body.file_name.toLowerCase() : "";
+    const isPdf = contentType.includes("pdf") || fileName.endsWith(".pdf");
+
+    if (isPdf) {
+      try {
+        const extraction = await extractPdfTextWithOcrFallback(buffer, { minTextChars: 80, maxOcrPages: 8 });
+        const extractedText = sanitizeText(extraction.text || "");
+        if (extractedText) return extractedText;
+      } catch (err) {
+        console.error("[parse-proposal] PDF extraction failed, falling back to text decode:", err);
+      }
+    }
+
     const decoded = sanitizeText(buffer.toString("utf8"));
     if (decoded) return decoded;
     return sanitizeText(String(body.file_name || ""));

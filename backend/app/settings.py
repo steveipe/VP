@@ -45,7 +45,7 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    frontend_base_url: str = "http://10.214.102.101:3000"
+    frontend_base_url: str = "http://127.0.0.1:3000"
     api_prefix: str = "/api"
     job_store_path: str = str(Path(__file__).resolve().parent / "procurelink_jobs.sqlite3")
     cors_allow_origins_raw: str = Field(

@@ -1,71 +1,49 @@
 import jsPDF from "jspdf";
+import { buildSectionAdditionalSentences } from "@/lib/appApi";
 import type { ProposalSections } from "./aiService";
 import type { ChartData } from "./aiService";
 
 /* ═══════════════════════════════════════════════════════════ */
-/*                  TEMPLATE THEME SYSTEM                      */
+/*                    PDF THEME SYSTEM                            */
 /* ═══════════════════════════════════════════════════════════ */
-
-export type TemplateName = "executive" | "modern" | "classic" | "minimal";
 
 type RGB = [number, number, number];
 
+type HeaderStyle = "gradient" | "sidebar" | "border" | "clean";
+
 interface ThemeColors {
-  primary: RGB; primaryDark: RGB; accent: RGB;
+  primary: RGB; accent: RGB;
   text: RGB; textMuted: RGB; sectionBg: RGB;
   white: RGB; border: RGB;
   success: RGB; warning: RGB; danger: RGB;
 }
 
-const THEMES: Record<TemplateName, { colors: ThemeColors; headerStyle: "gradient" | "sidebar" | "border" | "clean" }> = {
-  executive: {
-    colors: {
-      primary: [37,99,235], primaryDark: [30,64,175], accent: [124,58,237],
-      text: [15,23,42], textMuted: [100,116,139], sectionBg: [241,245,249],
-      white: [239,236,227], border: [203,213,225],
-      success: [34,197,94], warning: [245,158,11], danger: [239,68,68],
-    },
-    headerStyle: "gradient",
+const THEME: { colors: ThemeColors; headerStyle: HeaderStyle } = {
+  colors: {
+    primary: [37,99,235] as RGB,
+    accent: [124,58,237] as RGB,
+    text: [15,23,42] as RGB,
+    textMuted: [100,116,139] as RGB,
+    sectionBg: [241,245,249] as RGB,
+    white: [239,236,227] as RGB,
+    border: [203,213,225] as RGB,
+    success: [34,197,94] as RGB,
+    warning: [245,158,11] as RGB,
+    danger: [239,68,68] as RGB,
   },
-  modern: {
-    colors: {
-      primary: [6,182,212], primaryDark: [8,145,178], accent: [236,72,153],
-      text: [15,23,42], textMuted: [71,85,105], sectionBg: [240,253,250],
-      white: [239,236,227], border: [167,243,208],
-      success: [16,185,129], warning: [251,191,36], danger: [244,63,94],
-    },
-    headerStyle: "sidebar",
-  },
-  classic: {
-    colors: {
-      primary: [120,53,15], primaryDark: [69,26,3], accent: [161,98,7],
-      text: [28,25,23], textMuted: [120,113,108], sectionBg: [250,250,249],
-      white: [239,236,227], border: [214,211,209],
-      success: [22,163,74], warning: [202,138,4], danger: [185,28,28],
-    },
-    headerStyle: "border",
-  },
-  minimal: {
-    colors: {
-      primary: [39,39,42], primaryDark: [24,24,27], accent: [99,102,241],
-      text: [24,24,27], textMuted: [113,113,122], sectionBg: [250,250,250],
-      white: [239,236,227], border: [228,228,231],
-      success: [34,197,94], warning: [234,179,8], danger: [239,68,68],
-    },
-    headerStyle: "clean",
-  },
+  headerStyle: "gradient",
 };
-
-export const TEMPLATE_OPTIONS: { key: TemplateName; label: string; desc: string }[] = [
-  { key: "executive", label: "Executive", desc: "Corporate blue & violet, gradient headers" },
-  { key: "modern",    label: "Modern",    desc: "Teal & pink, sidebar-style layout" },
-  { key: "classic",   label: "Classic",   desc: "Warm brown tones, bordered design" },
-  { key: "minimal",   label: "Minimal",   desc: "Clean monochrome, subtle accents" },
-];
 
 /* ─── chart palette ─── */
 const PALETTE = ["#3B82F6","#8B5CF6","#06B6D4","#10B981","#F59E0B","#EF4444","#EC4899","#6366F1","#14B8A6","#F97316"];
 function hexRgb(h: string): RGB { const c = h.replace("#",""); return [parseInt(c.substring(0,2),16),parseInt(c.substring(2,4),16),parseInt(c.substring(4,6),16)]; }
+
+function buildPageFiller(sectionText: string, sectionLabel: string, contractTitle: string, vendorName: string): string {
+  const baseAddition = buildSectionAdditionalSentences(sectionText || sectionLabel, sectionLabel, contractTitle, vendorName);
+  return `${baseAddition}
+
+To ensure the ${sectionLabel.toLowerCase()} page is complete, ${vendorName} provides a clear, structured narrative of scope, delivery expectations, and quality controls for ${contractTitle}. This includes the planned review cadence, acceptance criteria, and milestone tracking so the proposal is reviewer-ready and easy to evaluate.`;
+}
 
 export interface ProposalPDFInput {
   title: string;
@@ -73,9 +51,8 @@ export interface ProposalPDFInput {
   contractTitle: string;
   totalPrice: string;
   timeline: string;
-  sections: ProposalSections;
-  sectionLabels: Record<keyof ProposalSections, string>;
-  template?: TemplateName;
+  sections: Record<string, string>;
+  sectionLabels: Record<string, string>;
   chartData?: ChartData | null;
   executiveSummary?: string;
 }
@@ -184,7 +161,8 @@ function generateProposalPDFBlobInWorker(input: ProposalPDFInput): Promise<Blob>
 
 function drawBarChart(doc: jsPDF, items: { label: string; value: number; color?: string }[], x: number, y: number, w: number, h: number, title: string, C: ThemeColors) {
   if (!items.length) return y;
-  doc.setFontSize(11); doc.setFont("helvetica","bold"); doc.setTextColor(...C.primaryDark);
+  const primaryTextColor = (C.primary ?? C.text) as RGB;
+  doc.setFontSize(11); doc.setFont("helvetica","bold"); doc.setTextColor(...primaryTextColor);
   doc.text(title, x, y); y += 6;
   const barH = h - 20;
   const max = Math.max(...items.map(i => i.value), 1);
@@ -215,7 +193,8 @@ function drawBarChart(doc: jsPDF, items: { label: string; value: number; color?:
 
 function drawGantt(doc: jsPDF, phases: { label: string; start_week: number; duration_weeks: number; color?: string }[], x: number, y: number, w: number, title: string, C: ThemeColors) {
   if (!phases.length) return y;
-  doc.setFontSize(11); doc.setFont("helvetica","bold"); doc.setTextColor(...C.primaryDark);
+  const primaryTextColor = (C.primary ?? C.text) as RGB;
+  doc.setFontSize(11); doc.setFont("helvetica","bold"); doc.setTextColor(...primaryTextColor);
   doc.text(title, x, y); y += 7;
   const total = Math.max(...phases.map(p => p.start_week + p.duration_weeks), 1);
   const lw = 40; const chartW = w - lw - 5; const rh = 9;
@@ -243,7 +222,8 @@ function drawGantt(doc: jsPDF, phases: { label: string; start_week: number; dura
 
 function drawDonut(doc: jsPDF, items: { label: string; value: number; color?: string }[], cx: number, cy: number, r: number, title: string, C: ThemeColors) {
   if (!items.length) return cy + r + 15;
-  doc.setFontSize(11); doc.setFont("helvetica","bold"); doc.setTextColor(...C.primaryDark);
+  const primaryTextColor = (C.primary ?? C.text) as RGB;
+  doc.setFontSize(11); doc.setFont("helvetica","bold"); doc.setTextColor(...primaryTextColor);
   doc.text(title, cx - r - 5, cy - r - 5);
   const tot = items.reduce((s, i) => s + i.value, 0) || 1;
   let sa = -Math.PI / 2;
@@ -274,10 +254,11 @@ function drawDonut(doc: jsPDF, items: { label: string; value: number; color?: st
 
 function drawRiskTable(doc: jsPDF, risks: { risk: string; probability: string; impact: string }[], x: number, y: number, w: number, title: string, C: ThemeColors) {
   if (!risks.length) return y;
-  doc.setFontSize(11); doc.setFont("helvetica","bold"); doc.setTextColor(...C.primaryDark);
+  const primaryTextColor = (C.primary ?? C.text) as RGB;
+  doc.setFontSize(11); doc.setFont("helvetica","bold"); doc.setTextColor(...primaryTextColor);
   doc.text(title, x, y); y += 7;
   const cols = [w * 0.5, w * 0.25, w * 0.25];
-  doc.setFillColor(...C.primaryDark); doc.roundedRect(x, y, w, 7, 1, 1, "F");
+  doc.setFillColor(...primaryTextColor); doc.roundedRect(x, y, w, 7, 1, 1, "F");
   doc.setFontSize(6.5); doc.setFont("helvetica","bold"); doc.setTextColor(...C.white);
   doc.text("Risk", x + 3, y + 4.5); doc.text("Probability", x + cols[0] + 3, y + 4.5); doc.text("Impact", x + cols[0] + cols[1] + 3, y + 4.5);
   y += 8;
@@ -299,7 +280,8 @@ function drawRiskTable(doc: jsPDF, risks: { risk: string; probability: string; i
 
 function drawTeamCards(doc: jsPDF, team: { name: string; role: string; experience_years: number }[], x: number, y: number, w: number, title: string, C: ThemeColors) {
   if (!team.length) return y;
-  doc.setFontSize(11); doc.setFont("helvetica","bold"); doc.setTextColor(...C.primaryDark);
+  const primaryTextColor = (C.primary ?? C.text) as RGB;
+  doc.setFontSize(11); doc.setFont("helvetica","bold"); doc.setTextColor(...primaryTextColor);
   doc.text(title, x, y); y += 7;
   const cardW = Math.min((w - (team.length - 1) * 4) / Math.min(team.length, 4), 42);
   const perRow = Math.min(team.length, Math.floor(w / (cardW + 4)));
@@ -325,9 +307,10 @@ function drawTeamCards(doc: jsPDF, team: { name: string; role: string; experienc
 /* ═══════════════════════════════════════════════════════════ */
 
 export function generateProposalPDF(input: ProposalPDFInput): jsPDF {
-  const { title, vendorName, contractTitle, totalPrice, timeline, sections, sectionLabels, template = "executive", chartData, executiveSummary } = input;
-  const theme = THEMES[template];
+  const { title, vendorName, contractTitle, totalPrice, timeline, sections, sectionLabels, chartData, executiveSummary } = input;
+  const theme = THEME;
   const C = theme.colors;
+  const primaryTextColor = C.primary;
   const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
   const pw = doc.internal.pageSize.getWidth();
   const ph = doc.internal.pageSize.getHeight();
@@ -413,7 +396,7 @@ export function generateProposalPDF(input: ProposalPDFInput): jsPDF {
       if (/^##\s+/.test(line)) {
         y += 3;
         pageBreak(10);
-        doc.setFontSize(10.5); doc.setFont("helvetica","bold"); doc.setTextColor(...C.primaryDark);
+        doc.setFontSize(10.5); doc.setFont("helvetica","bold"); doc.setTextColor(...primaryTextColor);
         const headingText = line.replace(/^##\s+/, "").trim();
         doc.text(headingText, sx, y); y += 2.5;
         doc.setDrawColor(...C.primary); doc.setLineWidth(0.4); doc.line(sx, y, sx + Math.min(doc.getTextWidth(headingText) + 5, sw * 0.5), y);
@@ -425,7 +408,7 @@ export function generateProposalPDF(input: ProposalPDFInput): jsPDF {
       if (/^[A-Z][A-Z\s&/,()-]{8,}$/.test(line.trim())) {
         y += 2;
         pageBreak(10);
-        doc.setFontSize(10); doc.setFont("helvetica","bold"); doc.setTextColor(...C.primaryDark);
+        doc.setFontSize(10); doc.setFont("helvetica","bold"); doc.setTextColor(...primaryTextColor);
         doc.text(line.trim(), sx, y); y += 2;
         doc.setDrawColor(...C.accent); doc.setLineWidth(0.3); doc.line(sx, y, sx + 30, y);
         y += 4;
@@ -449,7 +432,7 @@ export function generateProposalPDF(input: ProposalPDFInput): jsPDF {
           const colW = sw / cols;
           // Header row
           pageBreak(6);
-          doc.setFillColor(...C.primaryDark); doc.roundedRect(sx, y - 1, sw, 5.5, 1, 1, "F");
+          doc.setFillColor(...primaryTextColor); doc.roundedRect(sx, y - 1, sw, 5.5, 1, 1, "F");
           doc.setFontSize(6); doc.setFont("helvetica","bold"); doc.setTextColor(...C.white);
           tableRows[0].forEach((cell, ci) => {
             doc.text(cell.slice(0, 28), sx + ci * colW + 2, y + 2.5);
@@ -489,7 +472,7 @@ export function generateProposalPDF(input: ProposalPDFInput): jsPDF {
       const kvMatch = line.match(/^([A-Z][A-Za-z\s&/,()-]{2,30}):\s+(.+)$/);
       if (kvMatch && !line.startsWith("http")) {
         pageBreak(5);
-        doc.setFont("helvetica", "bold"); doc.setFontSize(8.5); doc.setTextColor(...C.primaryDark);
+        doc.setFont("helvetica", "bold"); doc.setFontSize(8.5); doc.setTextColor(...primaryTextColor);
         const keyText = kvMatch[1] + ": ";
         doc.text(keyText, sx, y);
         const keyWidth = doc.getTextWidth(keyText);
@@ -519,6 +502,23 @@ export function generateProposalPDF(input: ProposalPDFInput): jsPDF {
       y += 1;
       i++;
     }
+  };
+
+  /** Draw section content with a flexible filler so short sections still fill a page */
+  const renderSectionContent = (text: string, sx: number, sw: number, sectionLabel: string) => {
+    const currentPage = doc.getNumberOfPages();
+
+    renderRichText(text, sx, sw);
+
+    if (doc.getNumberOfPages() === currentPage && y < ph - 35) {
+      const filler = buildPageFiller(text, sectionLabel, contractTitle, vendorName);
+      if (filler) {
+        y += 4;
+        renderRichText(filler, sx, sw);
+      }
+    }
+
+    return y;
   };
 
   /** Draw a section divider page (half page) with section number and title */
@@ -551,7 +551,7 @@ export function generateProposalPDF(input: ProposalPDFInput): jsPDF {
 
     // Section title
     doc.setFontSize(20); doc.setFont("helvetica","bold");
-    doc.setTextColor(...(isFilledBg ? [220, 230, 255] as RGB : C.primaryDark));
+    doc.setTextColor(...(isFilledBg ? [220, 230, 255] as RGB : primaryTextColor));
     const titleLines = doc.splitTextToSize(label, cWidth - 30);
     let ty2 = centerY + 10;
     for (const l of titleLines) { doc.text(l, divX, ty2); ty2 += 9; }
@@ -619,11 +619,11 @@ export function generateProposalPDF(input: ProposalPDFInput): jsPDF {
   addFooter();
 
   /* ═══ TABLE OF CONTENTS ═══ */
-  const sKeys = Object.keys(sectionLabels) as (keyof ProposalSections)[];
-  const filled = sKeys.filter(k => sections[k]);
+  const sKeys = Object.keys(sectionLabels);
+  const filled = sKeys.filter((k) => sections[k]);
 
   doc.addPage(); addHeader(); y = 28;
-  doc.setFontSize(18); doc.setFont("helvetica","bold"); doc.setTextColor(...C.primaryDark);
+  doc.setFontSize(18); doc.setFont("helvetica","bold"); doc.setTextColor(...primaryTextColor);
   doc.text("Table of Contents", mg, y); y += 4;
   doc.setDrawColor(...C.primary); doc.setLineWidth(0.8); doc.line(mg, y, mg + 50, y); y += 10;
 
@@ -694,7 +694,7 @@ export function generateProposalPDF(input: ProposalPDFInput): jsPDF {
     ].forEach((m, mi) => {
       const mx = sx + mColW * mi + 6;
       doc.setFontSize(6); doc.setTextColor(...C.textMuted); doc.setFont("helvetica","normal"); doc.text(m.label, mx, y + 6);
-      doc.setFontSize(10); doc.setTextColor(...C.primaryDark); doc.setFont("helvetica","bold"); doc.text(String(m.value ?? "").slice(0, 22), mx, y + 13);
+      doc.setFontSize(10); doc.setTextColor(...primaryTextColor); doc.setFont("helvetica","bold"); doc.text(String(m.value ?? "").slice(0, 22), mx, y + 13);
     });
     y += 24;
 
@@ -705,9 +705,6 @@ export function generateProposalPDF(input: ProposalPDFInput): jsPDF {
 
   /* ═══ SECTION PAGES ═══ */
   filled.forEach((key, idx) => {
-    // Section divider page (half-page intro)
-    drawSectionDivider(idx, sectionLabels[key]);
-
     doc.addPage(); addHeader(); y = 28;
     const sx = theme.headerStyle === "sidebar" ? 16 : mg;
     const sw = theme.headerStyle === "sidebar" ? cWidth - 6 : cWidth;
@@ -717,12 +714,12 @@ export function generateProposalPDF(input: ProposalPDFInput): jsPDF {
       doc.setFillColor(...C.primary); doc.roundedRect(sx, y - 6, 10, 10, 2, 2, "F");
       doc.setFontSize(9); doc.setFont("helvetica","bold"); doc.setTextColor(...C.white);
       doc.text(String(idx + 1), sx + 5, y + 1, { align: "center" });
-      doc.setFontSize(14); doc.setFont("helvetica","bold"); doc.setTextColor(...C.primaryDark);
+      doc.setFontSize(14); doc.setFont("helvetica","bold"); doc.setTextColor(...primaryTextColor);
       doc.text(sectionLabels[key], sx + 14, y + 1); y += 5;
       doc.setDrawColor(...C.primary); doc.setLineWidth(0.6); doc.line(sx, y, sx + 50, y);
     } else if (theme.headerStyle === "border") {
       doc.setDrawColor(...C.primary); doc.setLineWidth(1.5); doc.line(mg, y - 2, mg, y + 8);
-      doc.setFontSize(14); doc.setFont("helvetica","bold"); doc.setTextColor(...C.primaryDark);
+      doc.setFontSize(14); doc.setFont("helvetica","bold"); doc.setTextColor(...primaryTextColor);
       doc.text(`${idx + 1}. ${sectionLabels[key]}`, mg + 5, y + 5); y += 10;
     } else {
       doc.setFontSize(10); doc.setTextColor(...C.textMuted); doc.setFont("helvetica","normal");
@@ -733,8 +730,8 @@ export function generateProposalPDF(input: ProposalPDFInput): jsPDF {
     }
     y += 6;
 
-    // Render section content with rich text formatting
-    renderRichText(sections[key], sx, sw);
+    // Render section content with rich text formatting and filler as needed
+    renderSectionContent(sections[key], sx, sw, sectionLabels[key]);
     addFooter();
   });
 
@@ -752,7 +749,7 @@ export function generateProposalPDF(input: ProposalPDFInput): jsPDF {
     if ((chartData.cost_breakdown?.length ?? 0) > 0) {
       // Budget distribution page
       doc.addPage(); addHeader(); y = 28;
-      doc.setFontSize(14); doc.setFont("helvetica","bold"); doc.setTextColor(...C.primaryDark);
+      doc.setFontSize(14); doc.setFont("helvetica","bold"); doc.setTextColor(...primaryTextColor);
       doc.text("Budget Distribution Analysis", mg, y); y += 4;
       doc.setDrawColor(...C.primary); doc.setLineWidth(0.5); doc.line(mg, y, mg + 60, y); y += 10;
       drawDonut(doc, chartData.cost_breakdown, mg + 35, y + 30, 22, "Budget Distribution", C);
@@ -762,7 +759,7 @@ export function generateProposalPDF(input: ProposalPDFInput): jsPDF {
     }
     if ((chartData.timeline_phases?.length ?? 0) > 0 || (chartData.team_structure?.length ?? 0) > 0) {
       doc.addPage(); addHeader(); y = 28;
-      doc.setFontSize(14); doc.setFont("helvetica","bold"); doc.setTextColor(...C.primaryDark);
+      doc.setFontSize(14); doc.setFont("helvetica","bold"); doc.setTextColor(...primaryTextColor);
       doc.text("Project Timeline & Team", mg, y); y += 4;
       doc.setDrawColor(...C.primary); doc.setLineWidth(0.5); doc.line(mg, y, mg + 60, y); y += 10;
       if ((chartData.timeline_phases?.length ?? 0) > 0) { y = drawGantt(doc, chartData.timeline_phases, mg, y, cWidth, "Project Timeline \u2014 Gantt Chart", C); y += 8; }
@@ -771,13 +768,13 @@ export function generateProposalPDF(input: ProposalPDFInput): jsPDF {
     }
     if ((chartData.risk_matrix?.length ?? 0) > 0) {
       doc.addPage(); addHeader(); y = 28;
-      doc.setFontSize(14); doc.setFont("helvetica","bold"); doc.setTextColor(...C.primaryDark);
+      doc.setFontSize(14); doc.setFont("helvetica","bold"); doc.setTextColor(...primaryTextColor);
       doc.text("Risk & Deliverables Analysis", mg, y); y += 4;
       doc.setDrawColor(...C.primary); doc.setLineWidth(0.5); doc.line(mg, y, mg + 60, y); y += 10;
       y = drawRiskTable(doc, chartData.risk_matrix, mg, y, cWidth, "Risk Assessment Matrix", C);
       if ((chartData.deliverables_progress?.length ?? 0) > 0) {
         y += 10; pageBreak(60);
-        doc.setFontSize(11); doc.setFont("helvetica","bold"); doc.setTextColor(...C.primaryDark);
+        doc.setFontSize(11); doc.setFont("helvetica","bold"); doc.setTextColor(...primaryTextColor);
         doc.text("Deliverables Weight Distribution", mg, y); y += 7;
         chartData.deliverables_progress.forEach(d => {
           pageBreak(10);
@@ -797,7 +794,7 @@ export function generateProposalPDF(input: ProposalPDFInput): jsPDF {
   // Appendix header
   doc.setFontSize(11); doc.setTextColor(...C.textMuted); doc.setFont("helvetica","normal");
   doc.text("APPENDIX", mg, y); y += 6;
-  doc.setFontSize(16); doc.setFont("helvetica","bold"); doc.setTextColor(...C.primaryDark);
+  doc.setFontSize(16); doc.setFont("helvetica","bold"); doc.setTextColor(...primaryTextColor);
   doc.text("Authorization & Signature", mg, y); y += 4;
   doc.setDrawColor(...C.primary); doc.setLineWidth(0.5); doc.line(mg, y, mg + 55, y);
   y += 12;
@@ -833,7 +830,7 @@ export function generateProposalPDF(input: ProposalPDFInput): jsPDF {
 
   /* ═══ NOTES PAGE ═══ */
   doc.addPage(); addHeader(); y = 28;
-  doc.setFontSize(16); doc.setFont("helvetica","bold"); doc.setTextColor(...C.primaryDark);
+  doc.setFontSize(16); doc.setFont("helvetica","bold"); doc.setTextColor(...primaryTextColor);
   doc.text("Notes", mg, y); y += 4;
   doc.setDrawColor(...C.primary); doc.setLineWidth(0.5); doc.line(mg, y, mg + 25, y); y += 12;
   // Draw ruled lines

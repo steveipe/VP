@@ -1,0 +1,8 @@
+Request for proposal: Vendor should provide a detailed bid for software development services, including project plan, timeline, and pricing.
+
+Requirements:
+- Custom web application
+- User authentication
+- Reporting dashboard
+
+Please submit a proposal with timeline and cost estimate.

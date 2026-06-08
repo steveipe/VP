@@ -3,7 +3,7 @@ import { Inter, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import { AuthProvider } from "@/contexts/AuthContext";
 import BackgroundGenerationSubscriber from "@/components/BackgroundGenerationSubscriber";
-// Navbar removed - keeping only proposal builder feature
+import Navbar from "@/components/Navbar";
 
 const inter = Inter({
   variable: "--font-inter",
@@ -30,7 +30,7 @@ export default function RootLayout({
       <body className={`${inter.variable} ${jetbrainsMono.variable} antialiased min-h-screen`} style={{ background: "var(--background)" }}>
         <AuthProvider>
           <BackgroundGenerationSubscriber />
-          {/* Navbar removed - keeping only proposal builder feature */}
+          <Navbar />
           <main>{children}</main>
         </AuthProvider>
       </body>

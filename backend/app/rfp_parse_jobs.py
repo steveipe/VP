@@ -137,6 +137,24 @@ async def _run_background_parse(job_id: str, body: dict[str, Any]) -> None:
             description=str(body.get("contract_description") or ""),
         )
 
+        # Ensure analysis has the expected shape. If the AI failed or returned
+        # invalid/empty output, fall back to a safe, empty structure so the
+        # frontend doesn't receive an empty object and break parsing flows.
+        if not isinstance(analysis, dict) or not any(k in analysis for k in (
+            "key_requirements",
+            "evaluation_criteria",
+            "budget_range",
+            "timeline_expectations",
+        )):
+            analysis = {
+                "key_requirements": [],
+                "evaluation_criteria": [],
+                "budget_range": "",
+                "timeline_expectations": "",
+                "submission_requirements": [],
+                "questions_for_vendor": [],
+            }
+
         update_rfp_parse_job(
             job_id,
             status="running",

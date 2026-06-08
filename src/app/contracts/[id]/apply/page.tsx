@@ -63,6 +63,23 @@ const SECTION_LABELS: Record<keyof ProposalSections, string> = {
   final_declaration: "Final Declaration",
 };
 
+const CHAT_SECTION_KEYS: (keyof ProposalSections)[] = [
+  "company_profile",
+  "project_understanding",
+  "proposed_solution",
+  "deliverables",
+  "project_timeline",
+  "cost_proposal",
+  "team_details",
+  "past_experience",
+  "risk_management",
+  "support_maintenance",
+  "graphs_visualizations",
+  "terms_conditions",
+  "document_uploads",
+  "final_declaration",
+];
+
 const SECTION_ICONS: Record<keyof ProposalSections, string> = {
   vendor_information: "M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z",
   company_profile: "M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4",
@@ -287,7 +304,7 @@ export default function ApplyPage() {
         setSectionIndex(resp.section_index);
       })
       .catch(() => {
-        setChatMessages([{ role: "assistant", content: "Welcome! Let\u2019s build your proposal. To start, please share your company name, primary contact person, email, phone, address, and years of experience." }]);
+        setChatMessages([{ role: "assistant", content: "Starting Section 1: Company Profile. Please describe your company, capabilities, and experience relevant to this RFP." }]);
       })
       .finally(() => setChatLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -423,14 +440,12 @@ export default function ApplyPage() {
     setChatInput("");
     setChatLoading(true);
     try {
-      // Tell the API which section to ask about next
-      const nextIndex = Math.min(sectionIndex + 1, 15);
-      // Only send last 4 messages to avoid LLM context overflow; full history kept for final generation
+      // Send the current section index; the backend determines whether to stay or advance.
       const recentMessages = updated.slice(-4);
-      const resp = await proposalChat(recentMessages, getRfpContext(), nextIndex);
+      const resp = await proposalChat(recentMessages, getRfpContext(), sectionIndex);
       setChatMessages([...updated, { role: "assistant", content: resp.reply }]);
       setSectionIndex(resp.section_index);
-      if (resp.proposal_ready || resp.section_index >= 15) {
+      if (resp.proposal_ready || resp.section_index >= CHAT_SECTION_KEYS.length) {
         setProposalReady(true);
       }
     } catch {
@@ -454,6 +469,7 @@ export default function ApplyPage() {
       setTotalPrice(proposal.total_price);
       setTimelineSummary(proposal.timeline_summary);
       setShowPdfOptions(true);
+      setStep("editor");
     } catch {
       alert("Failed to generate proposal. Please try again.");
     }
@@ -923,7 +939,7 @@ export default function ApplyPage() {
             <div className="flex items-center justify-between">
               <div>
                 <h2 className="text-lg font-bold text-[var(--foreground)]">AI Proposal Builder</h2>
-                <p className="text-xs text-[var(--muted)]">Answer all 15 sections. The AI will ask about each one in order.</p>
+                <p className="text-xs text-[var(--muted)]">Answer all 14 sections. The AI will ask about each one in order.</p>
               </div>
               <div className="flex gap-2">
                 {(proposalReady || chatMessages.length >= 6) && !showPdfOptions && (
@@ -948,10 +964,10 @@ export default function ApplyPage() {
             <div className="card !p-4">
               <div className="flex items-center justify-between mb-2">
                 <p className="text-xs font-semibold text-[var(--foreground)]">Interview Progress</p>
-                <span className="text-xs font-bold text-[var(--primary)]">{Math.min(sectionIndex, 15)}/15 Sections</span>
+                <span className="text-xs font-bold text-[var(--primary)]">{Math.min(sectionIndex, CHAT_SECTION_KEYS.length)}/{CHAT_SECTION_KEYS.length} Sections</span>
               </div>
               <div className="w-full bg-[var(--surface)] rounded-full h-2.5">
-                <div className="bg-gradient-to-r from-violet-500 to-emerald-500 h-2.5 rounded-full transition-all duration-700 ease-out" style={{ width: `${(Math.min(sectionIndex, 15) / 15) * 100}%` }} />
+                <div className="bg-gradient-to-r from-violet-500 to-emerald-500 h-2.5 rounded-full transition-all duration-700 ease-out" style={{ width: `${(Math.min(sectionIndex, CHAT_SECTION_KEYS.length) / CHAT_SECTION_KEYS.length) * 100}%` }} />
               </div>
             </div>
 
@@ -962,7 +978,7 @@ export default function ApplyPage() {
                 <div className="card !p-3 sticky top-24">
                   <p className="text-[10px] uppercase tracking-wider text-[var(--muted)] font-semibold px-2 mb-2">Section Checklist</p>
                   <div className="space-y-0.5 max-h-[26rem] overflow-y-auto">
-                    {(Object.keys(SECTION_LABELS) as (keyof ProposalSections)[]).map((key, idx) => {
+                    {CHAT_SECTION_KEYS.map((key, idx) => {
                       const isCovered = idx < sectionIndex;
                       const isAsking = idx === sectionIndex;
                       return (
@@ -997,9 +1013,9 @@ export default function ApplyPage() {
                         </div>
                         <div className="bg-[var(--surface)] rounded-2xl rounded-tl-sm px-4 py-3 max-w-[80%]">
                           <p className="text-sm text-[var(--foreground)] leading-relaxed">
-                            Hi! I&apos;m your AI proposal assistant. I&apos;ll guide you through <strong>all 15 sections</strong> to build a comprehensive proposal for <strong>{contract.title as string}</strong>.
+                            Hi! I&apos;m your AI proposal assistant. I&apos;ll guide you through <strong>all 14 sections</strong> to build a concise proposal for <strong>{contract.title as string}</strong>.
                             {rfpAnalysis && <> I&apos;ve analyzed the RFP and will tailor my questions to the requirements.</>}
-                            {" "}Let&apos;s start with <strong>Section 1: Vendor Basic Information</strong> — tell me your company name, primary contact, email, phone, address, and years of experience.
+                            {" "}Let&apos;s start with <strong>Section 1: Company Profile</strong> — tell me your company name, core capabilities, and relevant experience for this RFP.
                           </p>
                         </div>
                       </div>
@@ -1120,7 +1136,7 @@ export default function ApplyPage() {
                 Back
               </button>
               {chatMessages.length > 0 && (
-                <p className="text-xs text-[var(--muted)]">{chatMessages.filter((m) => m.role === "user").length} responses &middot; {Math.min(sectionIndex, 15)}/15 sections covered</p>
+                <p className="text-xs text-[var(--muted)]">{chatMessages.filter((m) => m.role === "user").length} responses &middot; {Math.min(sectionIndex, CHAT_SECTION_KEYS.length)}/{CHAT_SECTION_KEYS.length} sections covered</p>
               )}
             </div>
           </div>

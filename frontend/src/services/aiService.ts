@@ -1,4 +1,5 @@
 import { supabase } from "@/services/supabase";
+import { apiUrl } from "@/lib/api";
 
 const AI_API_BASE_PATH = "/api/ai";
 const AI_API_BASE = AI_API_BASE_PATH;
@@ -528,8 +529,9 @@ export async function parseRFP(
   });
 
   const startedAt = Date.now();
-  const startEndpoint = "/api/ai/parse-rfp/background";
-  console.log("[aiService] Queueing parse job:", startEndpoint);
+  // Use backend job endpoints so the authoritative JobStore is the backend service
+  const startEndpoint = apiUrl("/api/ai/parse-rfp/background");
+  console.log("[aiService] Queueing parse job (backend):", startEndpoint);
 
   onProgress?.({
     status: "queued",
@@ -564,7 +566,7 @@ export async function parseRFP(
 
   while (Date.now() - startedAt < maxWaitMs) {
     const elapsedMs = Date.now() - startedAt;
-    const pollEndpoint = `/api/ai/parse-rfp/jobs/${jobId}`;
+    const pollEndpoint = apiUrl(`/api/ai/parse-rfp/jobs/${jobId}`);
     const pollRes = await fetch(pollEndpoint, {
       method: "GET",
       headers: { "Content-Type": "application/json", Accept: "application/json", "Cache-Control": "no-cache" },
@@ -572,7 +574,7 @@ export async function parseRFP(
 
     if (!pollRes.ok) {
       const error = await pollRes.text();
-      console.error("[aiService] Failed polling parse job:", { jobId, error });
+      console.error(`[aiService] Failed polling parse job: jobId=${String(jobId)} error=${String(error)}`);
       throw new Error(`Failed polling RFP parse job: ${error}`);
     }
 

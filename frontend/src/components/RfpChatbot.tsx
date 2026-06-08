@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
+import { buildChatQuestion, PROPOSAL_SECTION_KEYS } from "@/lib/appApi";
 import { RFP_QUESTIONS, FINAL_INTAKE_KEY, getFinalIntakeQuestionLabel, type PipelineProgress, type PipelineResult, type RfpInput, type DecompositionData, type PdfTemplate, type QAResult } from "@/lib/rfp/config";
 import { useAuth } from "@/contexts/AuthContext";
 import { useRouter } from "next/navigation";
@@ -170,6 +171,9 @@ export default function RfpChatbot({ onSaved, contractId, onRfpGenerated }: RfpC
     { role: "bot", text: "I’m going to be a little yappy here on purpose — I’ll walk you through the RFP, explain what each answer is doing, and keep flagging anything missing so we can fill it in together." },
     { role: "bot", text: RFP_QUESTIONS[0].label },
   ]);
+  const [showSectionForm, setShowSectionForm] = useState(false);
+  const [sectionMode, setSectionMode] = useState(false); // when true, ask proposal sections one-by-one
+  const [sectionIndexState, setSectionIndexState] = useState(0);
   const [progress, setProgress] = useState<PipelineProgress | null>(null);
   const [result, setResult] = useState<Omit<PipelineResult, "pdfBase64"> | null>(null);
   const [pdfBase64, setPdfBase64] = useState<string | null>(null);
@@ -508,41 +512,57 @@ export default function RfpChatbot({ onSaved, contractId, onRfpGenerated }: RfpC
     setInputValue("");
 
     try {
-      const res = await fetch(apiUrl("/api/rfp/intake"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: answerText, answers, currentQuestionKey: currentPromptKey }),
-      });
+      if (sectionMode) {
+        // Save the answer to the corresponding proposal section
+        const sectionKey = PROPOSAL_SECTION_KEYS[Math.min(sectionIndexState, PROPOSAL_SECTION_KEYS.length - 1)];
+        setAnswers((prev) => ({ ...prev, [sectionKey]: answerText }));
+        // Push assistant next question or completion
+        const nextIndex = sectionIndexState + 1;
+        if (nextIndex < PROPOSAL_SECTION_KEYS.length) {
+          const nextPrompt = buildChatQuestion(nextIndex);
+          setMessages((prev) => [...prev, { role: "bot", text: nextPrompt }]);
+          setSectionIndexState(nextIndex);
+        } else {
+          setMessages((prev) => [...prev, { role: "bot", text: "All sections captured — you can review or click Generate RFP." }]);
+          setSectionMode(false);
+        }
+      } else {
+        const res = await fetch(apiUrl("/api/rfp/intake"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message: answerText, answers, currentQuestionKey: currentPromptKey }),
+        });
 
-      if (!res.ok) {
-        const errText = await res.text().catch(() => "Failed to extract intake fields");
-        throw new Error(errText);
-      }
+        if (!res.ok) {
+          const errText = await res.text().catch(() => "Failed to extract intake fields");
+          throw new Error(errText);
+        }
 
-      const data = (await res.json()) as IntakeResponse;
-      const mergedAnswers = {
-        ...answers,
-        ...(data.extractedAnswers || {}),
-      };
+        const data = (await res.json()) as IntakeResponse;
+        const mergedAnswers = {
+          ...answers,
+          ...(data.extractedAnswers || {}),
+        };
 
-      setAnswers(mergedAnswers);
-      if (forcedQuestionKey && mergedAnswers[forcedQuestionKey]?.trim()) {
-        setForcedQuestionKey(null);
-      }
+        setAnswers(mergedAnswers);
+        if (forcedQuestionKey && mergedAnswers[forcedQuestionKey]?.trim()) {
+          setForcedQuestionKey(null);
+        }
 
-      const nextQuestionKey = data.nextQuestionKey || getNextRequiredKey(mergedAnswers);
-      const nextLabel = getQuestionLabelByKey(nextQuestionKey);
-      const botMessage =
-        data.chatReply ||
-        data.clarifyingQuestion ||
-        (nextQuestionKey
-          ? `Nice, that helps. Next I need: ${nextLabel || nextQuestionKey}. You can answer briefly, or say "auto" if you want me to infer it from the RFP and keep moving.`
-          : data.readyForGeneration
-            ? "Great — I have enough information to generate the RFP. If you want, you can still add any last-minute details before clicking **Generate RFP**."
-            : "I’m still checking for any missing details so I can keep the RFP complete and consistent.");
+        const nextQuestionKey = data.nextQuestionKey || getNextRequiredKey(mergedAnswers);
+        const nextLabel = getQuestionLabelByKey(nextQuestionKey);
+        const botMessage =
+          data.chatReply ||
+          data.clarifyingQuestion ||
+          (nextQuestionKey
+            ? `Nice, that helps. Next I need: ${nextLabel || nextQuestionKey}. You can answer briefly, or say "auto" if you want me to infer it from the RFP and keep moving.`
+            : data.readyForGeneration
+              ? "Great — I have enough information to generate the RFP. If you want, you can still add any last-minute details before clicking **Generate RFP**."
+              : "I’m still checking for any missing details so I can keep the RFP complete and consistent.");
 
-      if (botMessage) {
-        setMessages((prev) => [...prev, { role: "bot", text: botMessage }]);
+        if (botMessage) {
+          setMessages((prev) => [...prev, { role: "bot", text: botMessage }]);
+        }
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -675,6 +695,11 @@ export default function RfpChatbot({ onSaved, contractId, onRfpGenerated }: RfpC
       if (!q.isMetadata && q.key !== "detailed_project_description") {
         sections[q.key] = finalAnswers[q.key];
       }
+    }
+    // If user answered per-proposal-section (sectionMode), prefer those values
+    for (const key of PROPOSAL_SECTION_KEYS) {
+      if (finalAnswers[key]) sections[key] = finalAnswers[key];
+      else if (!sections[key]) sections[key] = "";
     }
 
     const input: RfpInput = {
@@ -996,10 +1021,59 @@ export default function RfpChatbot({ onSaved, contractId, onRfpGenerated }: RfpC
             </div>
           ))}
         </div>
+          <div style={{ marginTop: 8, display: "flex", justifyContent: "flex-end", gap: 8 }}>
+            <button className="btn-ghost" onClick={() => setShowSectionForm((s) => !s)} style={{ fontSize: 12 }}>
+              {showSectionForm ? "Switch to Chat" : "Use Section Form"}
+            </button>
+            <button
+              className="btn-ghost"
+              onClick={() => {
+                if (!sectionMode) {
+                  setSectionIndexState(0);
+                  setMessages([{ role: "bot", text: buildChatQuestion(0) }]);
+                }
+                setSectionMode((v) => !v);
+                setShowSectionForm(false);
+              }}
+              style={{ fontSize: 12 }}
+            >
+              {sectionMode ? "Back to Intake" : "Ask Per Section"}
+            </button>
+          </div>
       </div>
 
+      {/* Section form view (alternative to chat) */}
+      {wizardStep === 1 && showSectionForm && (
+        <div style={{ padding: 16, maxHeight: 520, overflowY: "auto" }}>
+          <form onSubmit={(e) => { e.preventDefault(); runQaReview(); }}>
+            <div style={{ display: "grid", gap: 12 }}>
+              {RFP_QUESTIONS.map((q) => (
+                <label key={q.key} style={{ display: "grid", gap: 6 }}>
+                  <div style={{ fontWeight: 600 }}>{q.label}</div>
+                  {q.options ? (
+                    <select className="input-field" value={answers[q.key] || ""} onChange={(e) => setAnswers((prev) => ({ ...prev, [q.key]: e.target.value }))}>
+                      <option value="">-- select --</option>
+                      {q.options.map((opt) => (<option key={opt} value={opt}>{opt}</option>))}
+                    </select>
+                  ) : q.isTextarea ? (
+                    <textarea className="input-field" rows={4} value={answers[q.key] || ""} onChange={(e) => setAnswers((prev) => ({ ...prev, [q.key]: e.target.value }))} />
+                  ) : (
+                    <input className="input-field" value={answers[q.key] || ""} onChange={(e) => setAnswers((prev) => ({ ...prev, [q.key]: e.target.value }))} />
+                  )}
+                </label>
+              ))}
+            </div>
+
+            <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+              <button className="btn-primary" type="submit">Continue (QA Review)</button>
+              <button type="button" className="btn-outline" onClick={() => setShowSectionForm(false)}>Back to Chat</button>
+            </div>
+          </form>
+        </div>
+      )}
+
       {/* Chat messages */}
-      {wizardStep === 1 && (
+      {wizardStep === 1 && !showSectionForm && (
         <div ref={chatScrollRef} style={{ height: 400, overflowY: "auto", padding: "16px 20px" }}>
           <div style={{ background: "var(--surface)", border: "1px solid var(--card-border)", borderRadius: 12, padding: 12, marginBottom: 12, fontSize: 13, color: "var(--muted)", lineHeight: 1.6 }}>
             <div style={{ fontWeight: 600, color: "var(--foreground)", marginBottom: 4 }}>
@@ -1306,14 +1380,14 @@ export default function RfpChatbot({ onSaved, contractId, onRfpGenerated }: RfpC
         )}
 
       <div style={{ padding: "12px 20px", borderTop: "1px solid var(--card-border)" }}>
-        {wizardStep === 1 && flowState === "idle" && currentQuestion && (
+        {wizardStep === 1 && flowState === "idle" && (sectionMode || currentQuestion) && (
           <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
             <textarea
               className="input-field"
               value={inputValue}
               onChange={(e) => setInputValue(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder={currentQuestion?.placeholder || "Type your response here..."}
+              placeholder={sectionMode ? buildChatQuestion(sectionIndexState) : currentQuestion?.placeholder || "Type your response here..."}
               rows={3}
               style={{ flex: 1, resize: "none" }}
             />
