@@ -359,7 +359,7 @@ export default function ApplyPage() {
       setRfpText(text);
       const title = file.name.replace(/\.[^/.]+$/, "");
       setRfpTitle(title);
-      
+
       const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
       const rfpTextForRequest = isPdf && text.trim().length < 120 ? "" : text.trim();
 
@@ -1061,11 +1061,53 @@ export default function ApplyPage() {
               {rfpAnalysis && (
                 <div className="mt-6 p-4 bg-[var(--surface)] border border-[var(--divider)] rounded-xl">
                   <h3 className="text-sm font-semibold text-[var(--foreground)] mb-3">RFP Analysis</h3>
-                  <div className="space-y-2 text-sm text-[var(--muted)]">
+                  <div className="space-y-3 text-sm text-[var(--muted)]">
+                    {rfpAnalysis.summary && (
+                      <div>
+                        <p className="font-medium text-[var(--foreground)]">Summary:</p>
+                        <p className="mt-1">{rfpAnalysis.summary}</p>
+                      </div>
+                    )}
+
                     {rfpAnalysis.key_requirements && rfpAnalysis.key_requirements.length > 0 && (
                       <div>
                         <p className="font-medium text-[var(--foreground)]">Key Requirements:</p>
-                        <ul className="list-disc list-inside ml-2">{rfpAnalysis.key_requirements.slice(0, 3).map((r, i) => <li key={i}>{r}</li>)}</ul>
+                        <ul className="list-disc list-inside ml-2 mt-1">{rfpAnalysis.key_requirements.slice(0, 5).map((r, i) => <li key={i}>{r}</li>)}</ul>
+                      </div>
+                    )}
+
+                    {rfpAnalysis.technical_requirements && rfpAnalysis.technical_requirements.length > 0 && (
+                      <div>
+                        <p className="font-medium text-[var(--foreground)]">Technical Requirements:</p>
+                        <ul className="list-disc list-inside ml-2 mt-1">{rfpAnalysis.technical_requirements.slice(0, 3).map((r, i) => <li key={i}>{r}</li>)}</ul>
+                      </div>
+                    )}
+
+                    {rfpAnalysis.deliverables && rfpAnalysis.deliverables.length > 0 && (
+                      <div>
+                        <p className="font-medium text-[var(--foreground)]">Deliverables:</p>
+                        <ul className="list-disc list-inside ml-2 mt-1">{rfpAnalysis.deliverables.slice(0, 3).map((d, i) => <li key={i}>{d}</li>)}</ul>
+                      </div>
+                    )}
+
+                    {rfpAnalysis.evaluation_criteria && rfpAnalysis.evaluation_criteria.length > 0 && (
+                      <div>
+                        <p className="font-medium text-[var(--foreground)]">Evaluation Criteria:</p>
+                        <ul className="list-disc list-inside ml-2 mt-1">{rfpAnalysis.evaluation_criteria.slice(0, 3).map((c, i) => <li key={i}>{c}</li>)}</ul>
+                      </div>
+                    )}
+
+                    {rfpAnalysis.budget_range && (
+                      <div>
+                        <p className="font-medium text-[var(--foreground)]">Budget Range:</p>
+                        <p className="mt-1">{rfpAnalysis.budget_range}</p>
+                      </div>
+                    )}
+
+                    {rfpAnalysis.timeline_expectations && (
+                      <div>
+                        <p className="font-medium text-[var(--foreground)]">Timeline:</p>
+                        <p className="mt-1">{rfpAnalysis.timeline_expectations}</p>
                       </div>
                     )}
                   </div>

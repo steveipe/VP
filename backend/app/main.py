@@ -103,6 +103,9 @@ class ParseRFPRequest(BaseModel):
     contract_budget: str | None = None
     contract_deadline: str | None = None
     contract_industry: str | None = None
+    file_base64: str | None = None
+    file_name: str | None = None
+    content_type: str | None = None
 
 
 @app.post("/api/ai/parse-rfp")
@@ -110,6 +113,16 @@ async def parse_rfp_endpoint(body: ParseRFPRequest):
     """Parse RFP document using AI to extract key information."""
     try:
         rfp_text = body.rfp_text or ""
+        
+        # If no rfp_text but file_base64 is provided, extract text from PDF
+        if not rfp_text and body.file_base64:
+            try:
+                from .rfp_parse_jobs import _extract_pdf_text
+                file_bytes = base64.b64decode(body.file_base64)
+                rfp_text = _extract_pdf_text(file_bytes)
+            except Exception as e:
+                print(f"[AI] PDF extraction error: {e}")
+        
         if not rfp_text:
             return {
                 "rfp_analysis": {

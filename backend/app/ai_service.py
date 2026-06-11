@@ -45,16 +45,22 @@ async def parse_rfp_with_ai(rfp_text: str, title: str = "", description: str = "
     Use AI to analyze RFP text and extract key information.
     Returns structured RFP analysis with key requirements, evaluation criteria, etc.
     """
+    default_response = {
+        "summary": "",
+        "key_requirements": [],
+        "technical_requirements": [],
+        "deliverables": [],
+        "evaluation_criteria": [],
+        "required_certifications": [],
+        "budget_range": "",
+        "timeline_expectations": "",
+        "submission_requirements": [],
+        "questions_for_vendor": [],
+    }
+    
     if not OPENROUTER_API_KEY:
         logger.warning("OPENROUTER_API_KEY not set, returning minimal analysis")
-        return {
-            "key_requirements": [],
-            "evaluation_criteria": [],
-            "budget_range": "",
-            "timeline_expectations": "",
-            "submission_requirements": [],
-            "questions_for_vendor": [],
-        }
+        return default_response
     
     prompt = f"""Analyze this RFP document and extract key information in JSON format.
 
@@ -65,8 +71,12 @@ RFP Content:
 {rfp_text[:3000]}  # Keep input compact to reduce latency
 
 Extract and return JSON with these fields:
+- summary: brief overview of the RFP
 - key_requirements: list of main requirements
+- technical_requirements: list of technical/specific requirements
+- deliverables: list of expected deliverables
 - evaluation_criteria: list of evaluation criteria
+- required_certifications: list of certifications or qualifications needed
 - budget_range: budget information if available
 - timeline_expectations: timeline or deadline info
 - submission_requirements: list of submission requirements
@@ -91,25 +101,37 @@ Return only valid JSON, no other text."""
                         }
                     ],
                     "temperature": 0.3,
-                    "max_tokens": 700,
+                    "max_tokens": 1000,
                 },
                 timeout=20.0,
             )
             
             if response.status_code != 200:
                 logger.error(f"OpenRouter error: {response.text}")
-                return {}
+                return default_response
             
             data = response.json()
             content = data["choices"][0]["message"]["content"]
             
             # Parse JSON from response
             analysis = json.loads(content)
-            return analysis
+            # Ensure all required fields are present
+            return {
+                "summary": analysis.get("summary", ""),
+                "key_requirements": analysis.get("key_requirements", []),
+                "technical_requirements": analysis.get("technical_requirements", []),
+                "deliverables": analysis.get("deliverables", []),
+                "evaluation_criteria": analysis.get("evaluation_criteria", []),
+                "required_certifications": analysis.get("required_certifications", []),
+                "budget_range": analysis.get("budget_range", ""),
+                "timeline_expectations": analysis.get("timeline_expectations", ""),
+                "submission_requirements": analysis.get("submission_requirements", []),
+                "questions_for_vendor": analysis.get("questions_for_vendor", []),
+            }
             
     except Exception as e:
         logger.error(f"Error parsing RFP with AI: {e}")
-        return {}
+        return default_response
 
 
 async def parse_uploaded_proposal(proposal_text: str) -> dict:

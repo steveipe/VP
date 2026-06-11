@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Any
@@ -9,6 +10,22 @@ from uuid import uuid4
 from .ai_service import parse_rfp_with_ai
 from .job_store import JobStore, StoredJob
 from .settings import settings
+
+
+def _extract_pdf_text(data: bytes) -> str:
+    try:
+        from io import BytesIO
+        from pypdf import PdfReader
+        reader = PdfReader(BytesIO(data))
+        texts: list[str] = []
+        for page in reader.pages:
+            try:
+                texts.append(page.extract_text() or "")
+            except Exception:
+                texts.append("")
+        return "\n\n".join(text for text in texts if text).strip()
+    except Exception as error:
+        return ""
 
 
 def _now() -> str:
@@ -112,6 +129,17 @@ async def _run_background_parse(job_id: str, body: dict[str, Any]) -> None:
         update_rfp_parse_job(job_id, status="running", progress_message="Preparing RFP text", progress_percent=10)
 
         rfp_text = str(body.get("rfp_text") or "")
+        
+        # If no rfp_text but file_base64 is provided, extract text from PDF
+        if not rfp_text.strip() and body.get("file_base64"):
+            try:
+                file_base64 = body.get("file_base64")
+                file_bytes = base64.b64decode(file_base64)
+                rfp_text = _extract_pdf_text(file_bytes)
+                update_rfp_parse_job(job_id, status="running", progress_message="Extracted PDF text", progress_percent=30)
+            except Exception as e:
+                pass
+        
         if not rfp_text.strip():
             update_rfp_parse_job(
                 job_id,
@@ -119,8 +147,12 @@ async def _run_background_parse(job_id: str, body: dict[str, Any]) -> None:
                 progress_message="No text to parse",
                 progress_percent=100,
                 result={
+                    "summary": "",
                     "key_requirements": [],
+                    "technical_requirements": [],
+                    "deliverables": [],
                     "evaluation_criteria": [],
+                    "required_certifications": [],
                     "budget_range": "",
                     "timeline_expectations": "",
                     "submission_requirements": [],
@@ -147,8 +179,12 @@ async def _run_background_parse(job_id: str, body: dict[str, Any]) -> None:
             "timeline_expectations",
         )):
             analysis = {
+                "summary": "",
                 "key_requirements": [],
+                "technical_requirements": [],
+                "deliverables": [],
                 "evaluation_criteria": [],
+                "required_certifications": [],
                 "budget_range": "",
                 "timeline_expectations": "",
                 "submission_requirements": [],
